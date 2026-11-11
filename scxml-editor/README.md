@@ -27,3 +27,7 @@ Drag any state in the diagram to reposition it. Transition paths update while dr
 ## Property editing and history
 
 Select a state in the diagram to edit its ID, kind, initial-state status, and existing transitions. State renames update `initial` and `target` references. Each Apply operation uses a VS Code WorkspaceEdit, so the toolbar Undo and Redo buttons and the normal VS Code undo/redo commands restore document changes.
+
+## Creating and deleting chart elements
+
+Use **Add State** to create a top-level state. Select a state to add, edit, or delete its transitions, or to delete the state. Deleting a state removes matching targets from remaining transitions. All create/delete operations use VS Code document edits and participate in undo/redo.

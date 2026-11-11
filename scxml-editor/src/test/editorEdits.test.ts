@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { updateState, updateTransition } from '../editorEdits';
+import { createState, createTransition, deleteState, deleteTransition, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -12,5 +12,22 @@ suite('SCXML property edits', () => {
     const changed = updateTransition(source, { stateId: 'a', index: 0, event: 'next', cond: 'ready', targets: 'b' });
     assert.match(changed, /event="next"/);
     assert.match(changed, /cond="ready"/);
+  });
+});
+
+suite('SCXML create and delete', () => {
+  const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
+  test('creates and deletes states', () => {
+    const created = createState(source, { id: 'c', kind: 'final', initial: false });
+    assert.match(created, /<final id="c"\/>/);
+    const deleted = deleteState(created, 'b');
+    assert.doesNotMatch(deleted, /id="b"/);
+    assert.doesNotMatch(deleted, /target="b"/);
+  });
+  test('creates and deletes transitions', () => {
+    const created = createTransition(source, { stateId: 'b', event: 'reset', cond: '', targets: 'a' });
+    assert.match(created, /event="reset"/);
+    const deleted = deleteTransition(created, 'b', 0);
+    assert.doesNotMatch(deleted, /event="reset"/);
   });
 });

@@ -63,3 +63,77 @@ export function updateTransition(text: string, update: TransitionUpdate): string
 }
 
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+export interface NewState { id: string; kind: string; initial: boolean; }
+export interface NewTransition { stateId: string; event: string; cond: string; targets: string; }
+
+export function createState(text: string, state: NewState): string {
+  const id = state.id.trim();
+  if (!id) { throw new Error('State ID is required.'); }
+  if (findState(text, id)) { throw new Error(`State ${id} already exists.`); }
+  const rootOpen = /<scxml\b[^>]*>/i.exec(text);
+  if (!rootOpen) { throw new Error('The SCXML root element was not found.'); }
+  const rootClose = text.lastIndexOf('</scxml>');
+  if (rootClose < 0) { throw new Error('The SCXML closing element was not found.'); }
+  const kind = /^(state|parallel|final|history)$/.test(state.kind) ? state.kind : 'state';
+  const indentMatch = /\n([ \t]*)<(?:state|parallel|final|history)\b/.exec(text);
+  const indent = indentMatch?.[1] ?? '  ';
+  const element = `\n${indent}<${kind} id="${escapeXml(id)}"/>`;
+  let result = text.slice(0, rootClose) + element + '\n' + text.slice(rootClose);
+  if (state.initial) {
+    const updatedRoot = setAttribute(rootOpen[0], 'initial', id);
+    result = result.slice(0, rootOpen.index) + updatedRoot + result.slice(rootOpen.index + rootOpen[0].length);
+  }
+  return result;
+}
+
+export function deleteState(text: string, id: string): string {
+  const found = findState(text, id);
+  if (!found) { throw new Error(`State ${id} was not found.`); }
+  let start = found.start;
+  while (start > 0 && (text[start - 1] === ' ' || text[start - 1] === '\t')) { start--; }
+  if (start > 0 && text[start - 1] === '\n') { start--; }
+  let result = text.slice(0, start) + text.slice(found.end);
+  result = result.replace(/\s+initial\s*=\s*(["'])(.*?)\1/gi, (whole, quote, value) => value === id ? '' : whole);
+  result = result.replace(/<transition\b[^>]*>/gi, tag => {
+    const target = /\btarget\s*=\s*(["'])(.*?)\1/i.exec(tag);
+    if (!target) { return tag; }
+    const remaining = target[2].split(/\s+/).filter((value: string) => value && value !== id);
+    return setAttribute(tag, 'target', remaining.join(' '));
+  });
+  return result;
+}
+
+export function createTransition(text: string, transition: NewTransition): string {
+  const found = findState(text, transition.stateId);
+  if (!found) { throw new Error(`State ${transition.stateId} was not found.`); }
+  let tag = '<transition/>';
+  tag = setAttribute(tag, 'event', transition.event.trim());
+  tag = setAttribute(tag, 'cond', transition.cond.trim());
+  tag = setAttribute(tag, 'target', transition.targets.trim());
+  if (/\/\s*>$/.test(found.tag)) {
+    const open = found.tag.replace(/\/\s*>$/, '>');
+    const replacement = `${open}\n    ${tag}\n  </${found.kind}>`;
+    return text.slice(0, found.start) + replacement + text.slice(found.openEnd);
+  }
+  const insertion = `\n    ${tag}`;
+  return text.slice(0, found.openEnd) + insertion + text.slice(found.openEnd);
+}
+
+export function deleteTransition(text: string, stateId: string, transitionIndex: number): string {
+  const found = findState(text, stateId);
+  if (!found) { throw new Error(`State ${stateId} was not found.`); }
+  const region = text.slice(found.openEnd, found.end);
+  const pattern = /<transition\b[^>]*(?:\/>|>[\s\S]*?<\/transition>)/gi;
+  let match: RegExpExecArray | null; let index = 0;
+  while ((match = pattern.exec(region))) {
+    if (index++ !== transitionIndex) { continue; }
+    let start = found.openEnd + match.index;
+    while (start > found.openEnd && (text[start - 1] === ' ' || text[start - 1] === '\t')) { start--; }
+    if (start > found.openEnd && text[start - 1] === '\n') { start--; }
+    return text.slice(0, start) + text.slice(found.openEnd + match.index + match[0].length);
+  }
+  throw new Error(`Transition ${transitionIndex + 1} was not found in state ${stateId}.`);
+}
+
+function escapeXml(value: string): string { return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

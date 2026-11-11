@@ -23,3 +23,7 @@ The first milestone intentionally keeps the XML text as the source of truth and 
 ## Interactive layout
 
 Drag any state in the diagram to reposition it. Transition paths update while dragging. The layout is saved in VS Code workspace storage and does not modify the SCXML document. Use **Reset Layout** to return to automatic placement.
+
+## Property editing and history
+
+Select a state in the diagram to edit its ID, kind, initial-state status, and existing transitions. State renames update `initial` and `target` references. Each Apply operation uses a VS Code WorkspaceEdit, so the toolbar Undo and Redo buttons and the normal VS Code undo/redo commands restore document changes.

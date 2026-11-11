@@ -19,3 +19,7 @@ Open this folder in VS Code, press **F5**, open `samples/door.scxml`, and run **
 ## Current limitation
 
 The first milestone intentionally keeps the XML text as the source of truth and the diagram read-only. Diagram editing, nested-state layout, undo/redo edits, completion, go-to-target, and formatting are planned next.
+
+## Interactive layout
+
+Drag any state in the diagram to reposition it. Transition paths update while dragging. The layout is saved in VS Code workspace storage and does not modify the SCXML document. Use **Reset Layout** to return to automatic placement.

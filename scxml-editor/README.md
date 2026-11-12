@@ -50,3 +50,11 @@ Each state has a connector handle on its right edge. Drag the handle onto anothe
 #### Transition drop detection fix
 
 Transition drops are now resolved in SVG chart coordinates against each state's saved bounding box. This avoids pointer-capture behavior where DOM hit testing could continue to report the source connector instead of the state under the pointer. The destination state highlights while dragging, and releasing anywhere inside its state rectangle opens the transition dialog.
+
+##### First transition dialog race fix
+
+The connector pointer-up can generate a synthetic state click immediately afterward. That click previously sent `selectState` to the extension host, which rebuilt the webview and closed the newly opened transition dialog. Connector completion now stops propagation and suppresses that one synthetic click before opening the dialog.
+
+###### Transition target parsing fix
+
+The transition dialog now preserves the whitespace regular expression inside the generated webview script. Previously, the outer TypeScript template consumed the backslash, turning `\s+` into `s+`; a target such as `state2` was therefore split into an empty value and `tate2`. Targets are now normalized, empty entries are removed, and valid IDs are written back with single-space separators.

@@ -38,3 +38,7 @@ Use **Add State** to create a top-level state. Select a state to add, edit, or d
 - Right-click a state to edit its properties, add a transition, or delete it.
 - Right-click a transition line to select its properties or delete it.
 - Run **SCXML: New Empty State Chart** to create a valid empty `.scxml` file. The `.scxml` file association now opens the graphical editor by default, while **Show XML Source** opens the editable XML text.
+
+### Add State dialog fix
+
+The Add State toolbar and empty-space context action now use an in-webview modal form rather than browser `prompt()`. VS Code webviews do not reliably support blocking prompt dialogs. The form validates the ID, supports all state kinds and the initial-state option, and displays host-side edit errors.

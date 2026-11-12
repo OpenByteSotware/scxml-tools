@@ -42,3 +42,7 @@ Use **Add State** to create a top-level state. Select a state to add, edit, or d
 ### Add State dialog fix
 
 The Add State toolbar and empty-space context action now use an in-webview modal form rather than browser `prompt()`. VS Code webviews do not reliably support blocking prompt dialogs. The form validates the ID, supports all state kinds and the initial-state option, and displays host-side edit errors.
+
+### Drag-to-create transitions
+
+Each state has a connector handle on its right edge. Drag the handle onto another state to open the Add Transition dialog with source and target preselected. The state context-menu **Add transition** action opens the same dialog. Event and condition are optional; one or more valid target state IDs are required. Applying the dialog edits the SCXML document through WorkspaceEdit, so undo and redo remain supported.

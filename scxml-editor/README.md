@@ -58,3 +58,7 @@ The connector pointer-up can generate a synthetic state click immediately afterw
 ###### Transition target parsing fix
 
 The transition dialog now preserves the whitespace regular expression inside the generated webview script. Previously, the outer TypeScript template consumed the backslash, turning `\s+` into `s+`; a target such as `state2` was therefore split into an empty value and `tate2`. Targets are now normalized, empty entries are removed, and valid IDs are written back with single-space separators.
+
+## Stage 1: compound states and substates
+
+A normal state can now be expanded into a compound state by adding nested substates. Select or right-click a state and choose **Add substate**. The child can be marked initial, which writes the parent's `initial` attribute. Compound states automatically render as larger containers with their child states inside. Final and history states reject children. Parallel-region authoring is intentionally reserved for Stage 2.

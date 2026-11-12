@@ -2,7 +2,7 @@ import { XMLParser, XMLValidator } from 'fast-xml-parser';
 
 export type StateKind = 'state' | 'parallel' | 'final' | 'history';
 export interface Transition { event?: string; cond?: string; targets: string[]; }
-export interface StateNode { id: string; kind: StateKind; children: StateNode[]; transitions: Transition[]; }
+export interface StateNode { id: string; kind: StateKind; initial?: string; children: StateNode[]; transitions: Transition[]; }
 export interface ScxmlModel { name?: string; initial?: string; states: StateNode[]; ids: Set<string>; errors: string[]; }
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', preserveOrder: false, trimValues: false });
@@ -33,7 +33,7 @@ export function parseScxml(text: string): ScxmlModel {
       event: transition?.['@_event'], cond: transition?.['@_cond'],
       targets: String(transition?.['@_target'] ?? '').split(/\s+/).filter(Boolean)
     }));
-    return { id, kind, children, transitions };
+    return { id, kind, initial: raw?.['@_initial'], children, transitions };
   };
 
   const states: StateNode[] = [];

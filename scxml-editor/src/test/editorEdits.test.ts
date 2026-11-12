@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createState, createTransition, deleteState, deleteTransition, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createState, createTransition, deleteState, deleteTransition, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -29,5 +29,17 @@ suite('SCXML create and delete', () => {
     assert.match(created, /event="reset"/);
     const deleted = deleteTransition(created, 'b', 0);
     assert.doesNotMatch(deleted, /event="reset"/);
+  });
+});
+
+suite('SCXML compound states', () => {
+  test('adds an initial child to a simple state', () => {
+    const source = `<scxml><state id="parent"/></scxml>`;
+    const changed = createChildState(source, { parentId: 'parent', id: 'child', kind: 'state', initial: true });
+    assert.match(changed, /<state id="parent" initial="child">/);
+    assert.match(changed, /<state id="child"\/>/);
+  });
+  test('rejects children in final states', () => {
+    assert.throws(() => createChildState(`<scxml><final id="done"/></scxml>`, { parentId: 'done', id: 'bad', kind: 'state', initial: false }));
   });
 });

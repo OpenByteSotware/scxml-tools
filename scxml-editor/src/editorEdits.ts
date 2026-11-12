@@ -137,3 +137,26 @@ export function deleteTransition(text: string, stateId: string, transitionIndex:
 }
 
 function escapeXml(value: string): string { return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+export interface NewChildState { parentId: string; id: string; kind: string; initial: boolean; }
+
+export function createChildState(text: string, child: NewChildState): string {
+  const parent = findState(text, child.parentId);
+  if (!parent) { throw new Error(`Parent state ${child.parentId} was not found.`); }
+  if (parent.kind === 'final' || parent.kind === 'history') { throw new Error(`${parent.kind} cannot contain child states.`); }
+  const id = child.id.trim();
+  if (!id) { throw new Error('Child state ID is required.'); }
+  if (findState(text, id)) { throw new Error(`State ${id} already exists.`); }
+  const kind = /^(state|parallel|final|history)$/.test(child.kind) ? child.kind : 'state';
+  const parentLine = text.lastIndexOf('\n', parent.start) + 1;
+  const parentIndent = text.slice(parentLine, parent.start).match(/^[ \t]*/)?.[0] ?? '';
+  const childIndent = parentIndent + '  ';
+  let openTag = parent.tag;
+  if (child.initial && parent.kind === 'state') { openTag = setAttribute(openTag, 'initial', id); }
+  const childElement = `${childIndent}<${kind} id="${escapeXml(id)}"/>`;
+  if (/\/\s*>$/.test(parent.tag)) {
+    openTag = openTag.replace(/\/\s*>$/, '>');
+    return text.slice(0, parent.start) + `${openTag}\n${childElement}\n${parentIndent}</${parent.kind}>` + text.slice(parent.openEnd);
+  }
+  return text.slice(0, parent.start) + openTag + text.slice(parent.openEnd, parent.end - (`</${parent.kind}>`).length) + `\n${childElement}\n${parentIndent}` + text.slice(parent.end - (`</${parent.kind}>`).length);
+}

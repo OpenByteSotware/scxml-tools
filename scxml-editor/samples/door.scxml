@@ -1,5 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="DoorController" initial="closed">
-  <state id="closed"><transition event="open" target="opened"/></state>
+  <state id="closed">
+    <transition event="e4" target="s3"/>
+    <transition event="e2" target="staate2"/><transition event="open" target="opened"/></state>
   <state id="opened"><transition event="close" target="closed"/></state>
+
+  <state id="staate2">
+    <transition event="e3" target="s3"/>
+  </state>
+
+  <state id="s3">
+    <state id="ss3">
+    <transition event="evs5" target="ss6"/>
+  </state>
+  </state>
+
+  <state id="sss4"/>
+
+  <state id="ss5"/>
+
+  <state id="ss6"/>
 </scxml>

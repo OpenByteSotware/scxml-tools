@@ -86,3 +86,7 @@ The SVG canvas was attempting to capture a pointer whose pointer-down target was
 ######## State drag mouse-event fallback
 
 State movement now uses `mousedown`, window-capture `mousemove`, and window-capture `mouseup` rather than pointer capture. Transition connector dragging continues to use pointer events independently. This removes the Chromium/VS Code webview pointer-capture dependency that prevented existing SVG states from moving on some Windows installations.
+
+######### Explicit state drag surface
+
+Each state now has a transparent SVG drag surface over its 66-pixel header. A single delegated canvas handler starts state movement only from that surface. This removes ambiguity from nested SVG groups, compound-state backgrounds, text, transition handles, and browser hit-testing. Transition handles remain separate and continue to create transitions.

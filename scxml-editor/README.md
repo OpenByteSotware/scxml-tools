@@ -82,3 +82,7 @@ State dragging now uses one SVG-level pointer-move and pointer-up controller ins
 ###### Pointer-capture correction
 
 The SVG canvas was attempting to capture a pointer whose pointer-down target was the state group. Chromium can reject that capture, preventing the drag lifecycle from continuing. Pointer capture is now requested from the source state itself, guarded against unsupported capture, while move/up/cancel tracking runs at the window capture phase. This keeps ordinary state dragging active even when the pointer leaves the state or SVG viewport.
+
+######## State drag mouse-event fallback
+
+State movement now uses `mousedown`, window-capture `mousemove`, and window-capture `mouseup` rather than pointer capture. Transition connector dragging continues to use pointer events independently. This removes the Chromium/VS Code webview pointer-capture dependency that prevented existing SVG states from moving on some Windows installations.

@@ -74,3 +74,11 @@ Parallel-region input is now normalized before XML generation, preventing undefi
 ### Nested-state drag/drop fix
 
 Nested SVG state groups propagate pointer events to ancestor groups. That caused the parent state handler to overwrite the actual dragged state, so the reparent message was never reliably sent for the intended state. State drag handlers now stop propagation, only the pointer-capturing state may complete the drop, the pointer location is used as the containment probe, and overlapping containers are resolved by deepest hierarchy level. The destination glows green while eligible.
+
+#### State movement regression fix
+
+State dragging now uses one SVG-level pointer-move and pointer-up controller instead of per-state move/up handlers. Pointer capture is held by the SVG canvas, ordinary movement updates the selected state and descendants continuously, and reparenting is evaluated only when the drag ends over a valid glowing destination. This restores free state movement while retaining drag-to-reparent behavior.
+
+###### Pointer-capture correction
+
+The SVG canvas was attempting to capture a pointer whose pointer-down target was the state group. Chromium can reject that capture, preventing the drag lifecycle from continuing. Pointer capture is now requested from the source state itself, guarded against unsupported capture, while move/up/cancel tracking runs at the window capture phase. This keeps ordinary state dragging active even when the pointer leaves the state or SVG viewport.

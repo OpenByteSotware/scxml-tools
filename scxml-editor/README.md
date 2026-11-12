@@ -46,3 +46,7 @@ The Add State toolbar and empty-space context action now use an in-webview modal
 ### Drag-to-create transitions
 
 Each state has a connector handle on its right edge. Drag the handle onto another state to open the Add Transition dialog with source and target preselected. The state context-menu **Add transition** action opens the same dialog. Event and condition are optional; one or more valid target state IDs are required. Applying the dialog edits the SCXML document through WorkspaceEdit, so undo and redo remain supported.
+
+#### Transition drop detection fix
+
+Transition drops are now resolved in SVG chart coordinates against each state's saved bounding box. This avoids pointer-capture behavior where DOM hit testing could continue to report the source connector instead of the state under the pointer. The destination state highlights while dragging, and releasing anywhere inside its state rectangle opens the transition dialog.

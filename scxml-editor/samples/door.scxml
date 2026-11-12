@@ -7,17 +7,38 @@
 
   <state id="staate2">
     <transition event="e3" target="s3"/>
+  
+  
+  
+  
+    <state id="ss5"/>
   </state>
 
   <state id="s3">
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
     <state id="ss3">
     <transition event="evs5" target="ss6"/>
-  </state>
+    
+    
+    
+      <state id="ss6">
+      </state>
+    </state>
   </state>
 
   <state id="sss4"/>
 
-  <state id="ss5"/>
 
-  <state id="ss6"/>
 </scxml>

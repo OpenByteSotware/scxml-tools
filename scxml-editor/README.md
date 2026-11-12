@@ -90,3 +90,9 @@ State movement now uses `mousedown`, window-capture `mousemove`, and window-capt
 ######### Explicit state drag surface
 
 Each state now has a transparent SVG drag surface over its 66-pixel header. A single delegated canvas handler starts state movement only from that surface. This removes ambiguity from nested SVG groups, compound-state backgrounds, text, transition handles, and browser hit-testing. Transition handles remain separate and continue to create transitions.
+
+########## Containment and attached-transition correction
+
+Containment is now selected from actual state-rectangle overlap rather than the mouse pointer alone. A destination must overlap at least 20 percent of the smaller state rectangle, and the deepest overlapping eligible state wins. Drop targeting is recomputed on mouse-up. Reparenting now clears saved positions for the entire moved subtree and sends the cleaned layout atomically with the SCXML reparent request.
+
+Transition routes are recalculated after every drag from the current source and target rectangles. The router selects the nearest horizontal or vertical sides and keeps both endpoints attached while either state moves.

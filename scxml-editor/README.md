@@ -31,3 +31,10 @@ Select a state in the diagram to edit its ID, kind, initial-state status, and ex
 ## Creating and deleting chart elements
 
 Use **Add State** to create a top-level state. Select a state to add, edit, or delete its transitions, or to delete the state. Deleting a state removes matching targets from remaining transitions. All create/delete operations use VS Code document edits and participate in undo/redo.
+
+## Context menus and new SCXML files
+
+- Right-click empty diagram space to create a state at that position.
+- Right-click a state to edit its properties, add a transition, or delete it.
+- Right-click a transition line to select its properties or delete it.
+- Run **SCXML: New Empty State Chart** to create a valid empty `.scxml` file. The `.scxml` file association now opens the graphical editor by default, while **Show XML Source** opens the editable XML text.

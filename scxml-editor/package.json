@@ -3,39 +3,81 @@
   "displayName": "SCXML State Chart Editor",
   "description": "SCXML validation and state-chart visualization for Visual Studio Code.",
   "version": "0.1.0",
-  "engines": { "vscode": "^1.100.0" },
-  "categories": ["Programming Languages", "Visualization"],
-  "activationEvents": ["onLanguage:scxml", "onCustomEditor:scxml.stateChart", "onCommand:scxml.createDocument"],
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Visualization"
+  ],
+  "activationEvents": [
+    "onLanguage:scxml",
+    "onCustomEditor:scxml.stateChart",
+    "onCommand:scxml.createDocument"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
-    "languages": [{
-      "id": "scxml",
-      "aliases": ["SCXML", "scxml"],
-      "extensions": [".scxml"],
-      "configuration": "./language-configuration.json"
-    }],
-    "grammars": [{
-      "language": "scxml",
-      "scopeName": "text.xml.scxml",
-      "path": "./syntaxes/scxml.tmLanguage.json"
-    }],
+    "languages": [
+      {
+        "id": "scxml",
+        "aliases": [
+          "SCXML",
+          "scxml"
+        ],
+        "extensions": [
+          ".scxml"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "scxml",
+        "scopeName": "text.xml.scxml",
+        "path": "./syntaxes/scxml.tmLanguage.json"
+      }
+    ],
     "commands": [
-      { "command": "scxml.createDocument", "title": "SCXML: Create State Chart" },
-      { "command": "scxml.openDiagram", "title": "SCXML: Open State Chart Diagram" }
+      {
+        "command": "scxml.newFile",
+        "title": "SCXML: New Empty State Chart"
+      },
+      {
+        "command": "scxml.createDocument",
+        "title": "SCXML: Create State Chart"
+      },
+      {
+        "command": "scxml.openDiagram",
+        "title": "SCXML: Open State Chart Diagram"
+      }
     ],
     "menus": {
-      "editor/title": [{
-        "command": "scxml.openDiagram",
-        "when": "resourceExtname == .scxml",
-        "group": "navigation"
-      }]
+      "editor/title": [
+        {
+          "command": "scxml.openDiagram",
+          "when": "resourceExtname == .scxml",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "scxml.newFile",
+          "group": "navigation@1"
+        }
+      ]
     },
-    "customEditors": [{
-      "viewType": "scxml.stateChart",
-      "displayName": "SCXML State Chart",
-      "selector": [{ "filenamePattern": "*.scxml" }],
-      "priority": "option"
-    }]
+    "customEditors": [
+      {
+        "viewType": "scxml.stateChart",
+        "displayName": "SCXML State Chart",
+        "selector": [
+          {
+            "filenamePattern": "*.scxml"
+          }
+        ],
+        "priority": "default"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

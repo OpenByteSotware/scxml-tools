@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createChildState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, reparentState, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -57,5 +57,17 @@ suite('SCXML parallel regions and deep recursion', () => {
     let text = `<scxml><state id="level0"/></scxml>`;
     for (let depth = 1; depth <= 30; depth++) { text = createChildState(text, { parentId: `level${depth - 1}`, id: `level${depth}`, kind: 'state', initial: true }); }
     assert.match(text, /id="level30"/);
+  });
+});
+
+suite('SCXML drag reparenting', () => {
+  test('moves a top-level state into a compound state', () => {
+    const source = `<scxml><state id="container"/><state id="child"/></scxml>`;
+    const changed = reparentState(source, { stateId: 'child', newParentId: 'container' });
+    assert.match(changed, /<state id="container">[\s\S]*<state id="child"\/>[\s\S]*<\/state>/);
+  });
+  test('rejects moving a parent into its descendant', () => {
+    const source = `<scxml><state id="parent"><state id="child"/></state></scxml>`;
+    assert.throws(() => reparentState(source, { stateId: 'parent', newParentId: 'child' }));
   });
 });

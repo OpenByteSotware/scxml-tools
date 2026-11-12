@@ -66,3 +66,7 @@ A normal state can now be expanded into a compound state by adding nested substa
 ## Stage 2: parallel regions and recursive hierarchy
 
 Parallel states now support explicit region creation. Select a parallel state and choose **Add region**, supplying a region ID and its initial child ID. Regions are rendered side by side, while ordinary compound-state children are rendered vertically. Recursive state nesting is supported to a maximum editor depth of 64, with focused coverage for 30 nested levels. Moving a compound or parallel container moves all descendants. Validation reports malformed parallel regions, invalid initial children, and depth overflow.
+
+### Parallel-region robustness and drag containment
+
+Parallel-region input is now normalized before XML generation, preventing undefined-value `.replace()` failures and routing errors back to the region dialog. A state can now be dragged into another state or parallel container. The deepest eligible destination under the dragged state's center glows green. Final and history states glow as invalid destinations. Dropping on a valid destination reparents the complete SCXML subtree through a WorkspaceEdit, preserving undo/redo and recursive descendants.

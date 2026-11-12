@@ -166,11 +166,12 @@ export function createChildState(text: string, child: NewChildState): string {
 export interface NewParallelRegion { parallelId: string; regionId: string; initialStateId: string; }
 
 export function createParallelRegion(text: string, region: NewParallelRegion): string {
-  const parent = findState(text, region.parallelId);
-  if (!parent) { throw new Error(`Parallel state ${region.parallelId} was not found.`); }
-  if (parent.kind !== 'parallel') { throw new Error(`${region.parallelId} is not a parallel state.`); }
-  const regionId = region.regionId.trim();
-  const initialId = region.initialStateId.trim();
+  const parallelId = String(region?.parallelId ?? '').trim();
+  const parent = findState(text, parallelId);
+  if (!parent) { throw new Error(`Parallel state ${parallelId} was not found.`); }
+  if (parent.kind !== 'parallel') { throw new Error(`${parallelId} is not a parallel state.`); }
+  const regionId = String(region?.regionId ?? '').trim();
+  const initialId = String(region?.initialStateId ?? '').trim();
   if (!regionId || !initialId) { throw new Error('Region ID and initial state ID are required.'); }
   if (findState(text, regionId)) { throw new Error(`State ${regionId} already exists.`); }
   if (findState(text, initialId)) { throw new Error(`State ${initialId} already exists.`); }
@@ -198,4 +199,48 @@ export function getStateDepth(text: string, id: string): number {
     else if (!/\/\s*>$/.test(token[0])) { depth++; }
   }
   return depth;
+}
+
+export interface ReparentStateRequest { stateId: string; newParentId: string; }
+
+export function reparentState(text: string, request: ReparentStateRequest): string {
+  const stateId = String(request.stateId ?? '').trim();
+  const newParentId = String(request.newParentId ?? '').trim();
+  if (!stateId || !newParentId) { throw new Error('State and destination parent IDs are required.'); }
+  if (stateId === newParentId) { throw new Error('A state cannot contain itself.'); }
+  const source = findState(text, stateId);
+  const parent = findState(text, newParentId);
+  if (!source) { throw new Error(`State ${stateId} was not found.`); }
+  if (!parent) { throw new Error(`Destination state ${newParentId} was not found.`); }
+  if (parent.kind === 'final' || parent.kind === 'history') { throw new Error(`${parent.kind} cannot contain child states.`); }
+  if (parent.start >= source.start && parent.end <= source.end) { throw new Error('A state cannot be moved into one of its descendants.'); }
+  const depth = getStateDepth(text, newParentId);
+  if (depth >= 64) { throw new Error('The editor supports a maximum state nesting depth of 64.'); }
+
+  let removeStart = source.start;
+  while (removeStart > 0 && (text[removeStart - 1] === ' ' || text[removeStart - 1] === '\t')) { removeStart--; }
+  if (removeStart > 0 && text[removeStart - 1] === '\n') { removeStart--; }
+  const sourceXml = text.slice(source.start, source.end);
+  let without = text.slice(0, removeStart) + text.slice(source.end);
+  const destination = findState(without, newParentId);
+  if (!destination) { throw new Error(`Destination state ${newParentId} was not found after moving the source.`); }
+
+  const parentLine = without.lastIndexOf('\n', destination.start) + 1;
+  const parentIndent = without.slice(parentLine, destination.start).match(/^[ \t]*/)?.[0] ?? '';
+  const childIndent = parentIndent + '  ';
+  const sourceLine = text.lastIndexOf('\n', source.start) + 1;
+  const sourceIndent = text.slice(sourceLine, source.start).match(/^[ \t]*/)?.[0] ?? '';
+  const normalized = sourceXml.split('\n').map((line, index) => {
+    const stripped = line.startsWith(sourceIndent) ? line.slice(sourceIndent.length) : line.trimStart();
+    return index === 0 ? childIndent + stripped : childIndent + stripped;
+  }).join('\n');
+
+  if (/\/\s*>$/.test(destination.tag)) {
+    const open = destination.tag.replace(/\/\s*>$/, '>');
+    const replacement = `${open}\n${normalized}\n${parentIndent}</${destination.kind}>`;
+    return without.slice(0, destination.start) + replacement + without.slice(destination.openEnd);
+  }
+  const close = `</${destination.kind}>`;
+  const closeStart = destination.end - close.length;
+  return without.slice(0, closeStart) + `\n${normalized}\n${parentIndent}` + without.slice(closeStart);
 }

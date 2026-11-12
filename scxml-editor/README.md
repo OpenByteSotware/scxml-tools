@@ -70,3 +70,7 @@ Parallel states now support explicit region creation. Select a parallel state an
 ### Parallel-region robustness and drag containment
 
 Parallel-region input is now normalized before XML generation, preventing undefined-value `.replace()` failures and routing errors back to the region dialog. A state can now be dragged into another state or parallel container. The deepest eligible destination under the dragged state's center glows green. Final and history states glow as invalid destinations. Dropping on a valid destination reparents the complete SCXML subtree through a WorkspaceEdit, preserving undo/redo and recursive descendants.
+
+### Nested-state drag/drop fix
+
+Nested SVG state groups propagate pointer events to ancestor groups. That caused the parent state handler to overwrite the actual dragged state, so the reparent message was never reliably sent for the intended state. State drag handlers now stop propagation, only the pointer-capturing state may complete the drop, the pointer location is used as the containment probe, and overlapping containers are resolved by deepest hierarchy level. The destination glows green while eligible.

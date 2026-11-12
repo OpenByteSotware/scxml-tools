@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createChildState, createState, createTransition, deleteState, deleteTransition, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -41,5 +41,21 @@ suite('SCXML compound states', () => {
   });
   test('rejects children in final states', () => {
     assert.throws(() => createChildState(`<scxml><final id="done"/></scxml>`, { parentId: 'done', id: 'bad', kind: 'state', initial: false }));
+  });
+});
+
+suite('SCXML parallel regions and deep recursion', () => {
+  test('creates parallel regions with initial children', () => {
+    let text = `<scxml><parallel id="system"/></scxml>`;
+    text = createParallelRegion(text, { parallelId: 'system', regionId: 'communications', initialStateId: 'offline' });
+    text = createParallelRegion(text, { parallelId: 'system', regionId: 'processing', initialStateId: 'idle' });
+    assert.match(text, /<parallel id="system">/);
+    assert.match(text, /<state id="communications" initial="offline">/);
+    assert.match(text, /<state id="processing" initial="idle">/);
+  });
+  test('supports at least 30 recursive substates', () => {
+    let text = `<scxml><state id="level0"/></scxml>`;
+    for (let depth = 1; depth <= 30; depth++) { text = createChildState(text, { parentId: `level${depth - 1}`, id: `level${depth}`, kind: 'state', initial: true }); }
+    assert.match(text, /id="level30"/);
   });
 });

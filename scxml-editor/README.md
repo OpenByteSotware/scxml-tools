@@ -62,3 +62,7 @@ The transition dialog now preserves the whitespace regular expression inside the
 ## Stage 1: compound states and substates
 
 A normal state can now be expanded into a compound state by adding nested substates. Select or right-click a state and choose **Add substate**. The child can be marked initial, which writes the parent's `initial` attribute. Compound states automatically render as larger containers with their child states inside. Final and history states reject children. Parallel-region authoring is intentionally reserved for Stage 2.
+
+## Stage 2: parallel regions and recursive hierarchy
+
+Parallel states now support explicit region creation. Select a parallel state and choose **Add region**, supplying a region ID and its initial child ID. Regions are rendered side by side, while ordinary compound-state children are rendered vertically. Recursive state nesting is supported to a maximum editor depth of 64, with focused coverage for 30 nested levels. Moving a compound or parallel container moves all descendants. Validation reports malformed parallel regions, invalid initial children, and depth overflow.

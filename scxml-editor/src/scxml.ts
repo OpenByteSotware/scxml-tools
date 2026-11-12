@@ -41,11 +41,20 @@ export function parseScxml(text: string): ScxmlModel {
     asArray(root[kind]).forEach((state, index) => states.push(readState(state, kind, `${kind}${index + 1}`)));
   }
   duplicates.forEach(id => errors.push(`Duplicate state id: ${id}`));
-  const visit = (state: StateNode) => {
+  const visit = (state: StateNode, depth = 0) => {
     state.transitions.flatMap(t => t.targets).filter(target => !ids.has(target)).forEach(target => errors.push(`State ${state.id} targets missing state ${target}.`));
-    state.children.forEach(visit);
+    if (depth > 64) { errors.push(`State ${state.id} exceeds the supported nesting depth of 64.`); }
+    if (state.initial && !state.children.some(child => child.id === state.initial)) { errors.push(`State ${state.id} has invalid initial child ${state.initial}.`); }
+    if (state.kind === 'parallel') {
+      if (state.children.length < 2) { errors.push(`Parallel state ${state.id} should contain at least two regions.`); }
+      state.children.forEach(region => {
+        if (region.kind !== 'state') { errors.push(`Parallel state ${state.id} region ${region.id} must be a state.`); }
+        if (!region.initial && region.children.length > 0) { errors.push(`Parallel region ${region.id} should define an initial child.`); }
+      });
+    }
+    state.children.forEach(child => visit(child, depth + 1));
   };
-  states.forEach(visit);
+  states.forEach(state => visit(state));
   if (root['@_initial'] && !ids.has(root['@_initial'])) { errors.push(`Initial state ${root['@_initial']} does not exist.`); }
   return { name: root['@_name'], initial: root['@_initial'], states, ids, errors };
 }

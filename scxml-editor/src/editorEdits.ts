@@ -143,6 +143,8 @@ export interface NewChildState { parentId: string; id: string; kind: string; ini
 export function createChildState(text: string, child: NewChildState): string {
   const parent = findState(text, child.parentId);
   if (!parent) { throw new Error(`Parent state ${child.parentId} was not found.`); }
+  const depth = getStateDepth(text, child.parentId);
+  if (depth >= 64) { throw new Error('The editor supports a maximum state nesting depth of 64.'); }
   if (parent.kind === 'final' || parent.kind === 'history') { throw new Error(`${parent.kind} cannot contain child states.`); }
   const id = child.id.trim();
   if (!id) { throw new Error('Child state ID is required.'); }
@@ -159,4 +161,41 @@ export function createChildState(text: string, child: NewChildState): string {
     return text.slice(0, parent.start) + `${openTag}\n${childElement}\n${parentIndent}</${parent.kind}>` + text.slice(parent.openEnd);
   }
   return text.slice(0, parent.start) + openTag + text.slice(parent.openEnd, parent.end - (`</${parent.kind}>`).length) + `\n${childElement}\n${parentIndent}` + text.slice(parent.end - (`</${parent.kind}>`).length);
+}
+
+export interface NewParallelRegion { parallelId: string; regionId: string; initialStateId: string; }
+
+export function createParallelRegion(text: string, region: NewParallelRegion): string {
+  const parent = findState(text, region.parallelId);
+  if (!parent) { throw new Error(`Parallel state ${region.parallelId} was not found.`); }
+  if (parent.kind !== 'parallel') { throw new Error(`${region.parallelId} is not a parallel state.`); }
+  const regionId = region.regionId.trim();
+  const initialId = region.initialStateId.trim();
+  if (!regionId || !initialId) { throw new Error('Region ID and initial state ID are required.'); }
+  if (findState(text, regionId)) { throw new Error(`State ${regionId} already exists.`); }
+  if (findState(text, initialId)) { throw new Error(`State ${initialId} already exists.`); }
+  const parentLine = text.lastIndexOf('\n', parent.start) + 1;
+  const parentIndent = text.slice(parentLine, parent.start).match(/^[ \t]*/)?.[0] ?? '';
+  const regionIndent = parentIndent + '  ';
+  const childIndent = regionIndent + '  ';
+  const element = `${regionIndent}<state id="${escapeXml(regionId)}" initial="${escapeXml(initialId)}">\n${childIndent}<state id="${escapeXml(initialId)}"/>\n${regionIndent}</state>`;
+  if (/\/\s*>$/.test(parent.tag)) {
+    const open = parent.tag.replace(/\/\s*>$/, '>');
+    return text.slice(0, parent.start) + `${open}\n${element}\n${parentIndent}</parallel>` + text.slice(parent.openEnd);
+  }
+  const close = `</parallel>`;
+  const closeStart = parent.end - close.length;
+  return text.slice(0, closeStart) + `\n${element}\n${parentIndent}` + text.slice(closeStart);
+}
+
+export function getStateDepth(text: string, id: string): number {
+  const target = findState(text, id);
+  if (!target) { throw new Error(`State ${id} was not found.`); }
+  const scanner = new RegExp(`<\\/?(?:${stateTags})\\b[^>]*>`, 'gi');
+  let depth = 0; let token: RegExpExecArray | null;
+  while ((token = scanner.exec(text)) && token.index < target.start) {
+    if (/^<\//.test(token[0])) { depth = Math.max(0, depth - 1); }
+    else if (!/\/\s*>$/.test(token[0])) { depth++; }
+  }
+  return depth;
 }

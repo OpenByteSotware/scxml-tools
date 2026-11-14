@@ -49,12 +49,30 @@ export function updateState(text: string, update: StateUpdate): string {
       return `${name}=${quote}${values.join(' ')}${quote}`;
     });
   }
-  const root = /<scxml\b[^>]*>/i.exec(result);
-  if (root) {
-    const changed = update.initial ? setAttribute(root[0], 'initial', update.id) : root[0].replace(new RegExp(`(\\sinitial\\s*=\\s*)(["'])${escapeRegExp(update.id)}\\2`, 'i'), '');
-    result = result.slice(0, root.index) + changed + result.slice(root.index + root[0].length);
-  }
+  result = setInitialInOwningScope(result, update.id, update.initial);
   return result;
+}
+
+function setInitialInOwningScope(text: string, stateId: string, initial: boolean): string {
+  const state = findState(text, stateId);
+  if (!state) { throw new Error(`State ${stateId} was not found after updating it.`); }
+  const parent = findImmediateParent(text, state);
+  if (parent) {
+    const parentState = findState(text, parent.id);
+    if (!parentState) { throw new Error(`Parent state ${parent.id} was not found.`); }
+    // A parallel activates every direct region. Its children do not compete for one initial slot.
+    if (parentState.kind === 'parallel') { return text; }
+    const changed = initial
+      ? setAttribute(parentState.tag, 'initial', stateId)
+      : parentState.tag.replace(new RegExp(`(\\sinitial\\s*=\\s*)(["'])${escapeRegExp(stateId)}\\2`, 'i'), '');
+    return text.slice(0, parentState.start) + changed + text.slice(parentState.openEnd);
+  }
+  const root = /<scxml\b[^>]*>/i.exec(text);
+  if (!root) { throw new Error('The SCXML root element was not found.'); }
+  const changed = initial
+    ? setAttribute(root[0], 'initial', stateId)
+    : root[0].replace(new RegExp(`(\\sinitial\\s*=\\s*)(["'])${escapeRegExp(stateId)}\\2`, 'i'), '');
+  return text.slice(0, root.index) + changed + text.slice(root.index + root[0].length);
 }
 
 export function updateTransition(text: string, update: TransitionUpdate): string {

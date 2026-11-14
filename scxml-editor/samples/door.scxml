@@ -5,7 +5,7 @@
     <transition event="e2" target="staate2"/><transition event="open" target="opened"/></state>
   <state id="opened"><transition event="close" target="closed"/></state>
 
-  <state id="staate2">
+  <state id="staate2" initial="ss5">
     <transition event="e3" target="s3"/>
   
   
@@ -35,6 +35,8 @@
             </state>
   
     <state id="ss3par"/>
+  
+    <state id="ss45"/>
   </parallel>
 
   <state id="sss4"/>

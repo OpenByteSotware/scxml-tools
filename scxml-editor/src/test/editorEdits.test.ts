@@ -91,3 +91,17 @@ suite('SCXML drag reparenting', () => {
     assert.match(changed, /<state id="two">[\s\S]*<state id="child"\/>[\s\S]*<\/state>/);
   });
 });
+
+suite('Initial state scopes', () => {
+  test('sets nested initial on compound parent and replaces sibling', () => {
+    const source = `<scxml><state id="parent" initial="one"><state id="one"/><state id="two"/></state></scxml>`;
+    const changed = updateState(source, { oldId: 'two', id: 'two', kind: 'state', initial: true });
+    assert.match(changed, /<state id="parent" initial="two">/);
+    assert.doesNotMatch(changed, /initial="one"/);
+  });
+  test('parallel direct regions do not add a parallel initial attribute', () => {
+    const source = `<scxml><parallel id="p"><state id="r1"/><state id="r2"/></parallel></scxml>`;
+    const changed = updateState(source, { oldId: 'r2', id: 'r2', kind: 'state', initial: true });
+    assert.doesNotMatch(changed, /<parallel[^>]*initial=/);
+  });
+});

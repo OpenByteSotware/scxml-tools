@@ -44,7 +44,10 @@ export function parseScxml(text: string): ScxmlModel {
   const visit = (state: StateNode, depth = 0) => {
     state.transitions.flatMap(t => t.targets).filter(target => !ids.has(target)).forEach(target => errors.push(`State ${state.id} targets missing state ${target}.`));
     if (depth > 64) { errors.push(`State ${state.id} exceeds the supported nesting depth of 64.`); }
-    if (state.initial && !state.children.some(child => child.id === state.initial)) { errors.push(`State ${state.id} has invalid initial child ${state.initial}.`); }
+    const initialTargets = String(state.initial ?? '').split(/\s+/).filter(Boolean);
+    if (state.kind !== 'parallel' && initialTargets.length > 1) { errors.push(`State ${state.id} must define at most one initial child.`); }
+    initialTargets.filter(target => !state.children.some(child => child.id === target)).forEach(target => errors.push(`State ${state.id} has invalid initial child ${target}.`));
+    if (state.kind === 'parallel' && state.initial) { errors.push(`Parallel state ${state.id} must not define an initial attribute; all direct regions are entered.`); }
     if (state.kind === 'parallel') {
       if (state.children.length < 2) { errors.push(`Parallel state ${state.id} should contain at least two regions.`); }
       state.children.forEach(region => {
@@ -55,6 +58,8 @@ export function parseScxml(text: string): ScxmlModel {
     state.children.forEach(child => visit(child, depth + 1));
   };
   states.forEach(state => visit(state));
-  if (root['@_initial'] && !ids.has(root['@_initial'])) { errors.push(`Initial state ${root['@_initial']} does not exist.`); }
+  const rootInitialTargets = String(root['@_initial'] ?? '').split(/\s+/).filter(Boolean);
+  if (rootInitialTargets.length > 1) { errors.push('The SCXML state chart must define at most one initial state.'); }
+  rootInitialTargets.filter(target => !states.some(state => state.id === target)).forEach(target => errors.push(`Initial state ${target} must be a direct child of scxml.`));
   return { name: root['@_name'], initial: root['@_initial'], states, ids, errors };
 }

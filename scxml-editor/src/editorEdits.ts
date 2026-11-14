@@ -27,11 +27,21 @@ function findState(text: string, id: string): { start: number; openEnd: number; 
 export function updateState(text: string, update: StateUpdate): string {
   const found = findState(text, update.oldId); if (!found) { throw new Error(`State ${update.oldId} was not found.`); }
   let openTag = setAttribute(found.tag, 'id', update.id.trim());
-  if (update.kind && update.kind !== found.kind) { openTag = openTag.replace(new RegExp(`^<${found.kind}\\b`, 'i'), `<${update.kind}`); }
+  const requestedKind = update.parallel === true
+    ? 'parallel'
+    : update.parallel === false && found.kind === 'parallel'
+      ? 'state'
+      : update.kind;
+  if (requestedKind && requestedKind !== found.kind) {
+    openTag = openTag.replace(new RegExp(`^<${found.kind}\\b`, 'i'), `<${requestedKind}`);
+  }
   let result = text.slice(0, found.start) + openTag + text.slice(found.openEnd);
   if (requestedKind && requestedKind !== found.kind && found.end > found.openEnd) {
-    const delta = openTag.length - found.tag.length; const closeStart = result.lastIndexOf(`</${found.kind}>`, found.end + delta);
-    if (closeStart >= 0) { result = result.slice(0, closeStart) + `</${requestedKind}>` + result.slice(closeStart + found.kind.length + 3); }
+    const delta = openTag.length - found.tag.length;
+    const closeStart = result.lastIndexOf(`</${found.kind}>`, found.end + delta);
+    if (closeStart >= 0) {
+      result = result.slice(0, closeStart) + `</${requestedKind}>` + result.slice(closeStart + found.kind.length + 3);
+    }
   }
   if (update.oldId !== update.id) {
     result = result.replace(/\b(initial|target)\s*=\s*(["'])(.*?)\2/gi, (whole, name, quote, value) => {

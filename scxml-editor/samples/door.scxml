@@ -28,7 +28,7 @@
   
   
   
-    <state id="ss3">
+    <state id="ss3" initial="sss7">
     <transition event="evs5" target="ss6"/>
     
     

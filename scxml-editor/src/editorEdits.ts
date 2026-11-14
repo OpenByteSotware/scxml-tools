@@ -1,4 +1,4 @@
-export interface StateUpdate { oldId: string; id: string; kind: string; initial: boolean; }
+export interface StateUpdate { oldId: string; id: string; kind: string; initial: boolean; parallel?: boolean; }
 export interface TransitionUpdate { stateId: string; index: number; event: string; cond: string; targets: string; }
 
 const stateTags = 'state|parallel|final|history';
@@ -29,9 +29,9 @@ export function updateState(text: string, update: StateUpdate): string {
   let openTag = setAttribute(found.tag, 'id', update.id.trim());
   if (update.kind && update.kind !== found.kind) { openTag = openTag.replace(new RegExp(`^<${found.kind}\\b`, 'i'), `<${update.kind}`); }
   let result = text.slice(0, found.start) + openTag + text.slice(found.openEnd);
-  if (update.kind && update.kind !== found.kind && found.end > found.openEnd) {
+  if (requestedKind && requestedKind !== found.kind && found.end > found.openEnd) {
     const delta = openTag.length - found.tag.length; const closeStart = result.lastIndexOf(`</${found.kind}>`, found.end + delta);
-    if (closeStart >= 0) { result = result.slice(0, closeStart) + `</${update.kind}>` + result.slice(closeStart + found.kind.length + 3); }
+    if (closeStart >= 0) { result = result.slice(0, closeStart) + `</${requestedKind}>` + result.slice(closeStart + found.kind.length + 3); }
   }
   if (update.oldId !== update.id) {
     result = result.replace(/\b(initial|target)\s*=\s*(["'])(.*?)\2/gi, (whole, name, quote, value) => {

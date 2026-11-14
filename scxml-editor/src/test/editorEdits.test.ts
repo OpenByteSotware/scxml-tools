@@ -8,6 +8,13 @@ suite('SCXML property edits', () => {
     assert.match(changed, /<final id="done"\/>/);
     assert.match(changed, /target="done"/);
   });
+
+  test('parallel checkbox converts state tags both ways', () => {
+    const madeParallel = updateState(`<scxml><state id="work"/></scxml>`, { oldId: 'work', id: 'work', kind: 'state', parallel: true, initial: false });
+    assert.match(madeParallel, /<parallel id="work"\/>/);
+    const madeState = updateState(madeParallel, { oldId: 'work', id: 'work', kind: 'parallel', parallel: false, initial: false });
+    assert.match(madeState, /<state id="work"\/>/);
+  });
   test('updates transition properties', () => {
     const changed = updateTransition(source, { stateId: 'a', index: 0, event: 'next', cond: 'ready', targets: 'b' });
     assert.match(changed, /event="next"/);

@@ -39,8 +39,11 @@
 
 
   <state id="ss6">
-        </state>
-  <state id="sss7">
-    <transition event="ev67" cond="canDoIt()" target="ss6"/>
+            <state id="sss7">
+        <transition event="ev67" cond="canDoIt()" target="ss6"/>
+      </state>
+  </state>
+  <state id="t6">
+    <transition event="t1t" cond="isOk()" target="s3"/>
   </state>
 </scxml>

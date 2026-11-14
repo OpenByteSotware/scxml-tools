@@ -70,4 +70,17 @@ suite('SCXML drag reparenting', () => {
     const source = `<scxml><state id="parent"><state id="child"/></state></scxml>`;
     assert.throws(() => reparentState(source, { stateId: 'parent', newParentId: 'child' }));
   });
+
+  test('moves a nested state back to the SCXML root', () => {
+    const source = `<scxml><state id="parent" initial="child"><state id="child"/></state></scxml>`;
+    const changed = reparentState(source, { stateId: 'child', newParentId: '' });
+    assert.match(changed, /<state id="parent">\s*<\/state>/);
+    assert.match(changed, /<state id="child"\/>\s*<\/scxml>/);
+    assert.doesNotMatch(changed, /initial="child"/);
+  });
+  test('moves a nested state between parents', () => {
+    const source = `<scxml><state id="one"><state id="child"/></state><state id="two"/></scxml>`;
+    const changed = reparentState(source, { stateId: 'child', newParentId: 'two' });
+    assert.match(changed, /<state id="two">[\s\S]*<state id="child"\/>[\s\S]*<\/state>/);
+  });
 });

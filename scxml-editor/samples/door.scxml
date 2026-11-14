@@ -32,13 +32,15 @@
     <transition event="evs5" target="ss6"/>
     
     
-    
-      <state id="ss6">
-      </state>
-    </state>
+            </state>
   </state>
 
   <state id="sss4"/>
 
 
+  <state id="ss6">
+        </state>
+  <state id="sss7">
+    <transition event="ev67" cond="canDoIt()" target="ss6"/>
+  </state>
 </scxml>

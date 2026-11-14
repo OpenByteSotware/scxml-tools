@@ -201,39 +201,61 @@ export function getStateDepth(text: string, id: string): number {
   return depth;
 }
 
-export interface ReparentStateRequest { stateId: string; newParentId: string; }
+export interface ReparentStateRequest { stateId: string; newParentId?: string; }
 
 export function reparentState(text: string, request: ReparentStateRequest): string {
   const stateId = String(request.stateId ?? '').trim();
   const newParentId = String(request.newParentId ?? '').trim();
-  if (!stateId || !newParentId) { throw new Error('State and destination parent IDs are required.'); }
+  if (!stateId) { throw new Error('State ID is required.'); }
   if (stateId === newParentId) { throw new Error('A state cannot contain itself.'); }
+
   const source = findState(text, stateId);
-  const parent = findState(text, newParentId);
   if (!source) { throw new Error(`State ${stateId} was not found.`); }
-  if (!parent) { throw new Error(`Destination state ${newParentId} was not found.`); }
-  if (parent.kind === 'final' || parent.kind === 'history') { throw new Error(`${parent.kind} cannot contain child states.`); }
-  if (parent.start >= source.start && parent.end <= source.end) { throw new Error('A state cannot be moved into one of its descendants.'); }
-  const depth = getStateDepth(text, newParentId);
-  if (depth >= 64) { throw new Error('The editor supports a maximum state nesting depth of 64.'); }
+  const parent = newParentId ? findState(text, newParentId) : undefined;
+  if (newParentId && !parent) { throw new Error(`Destination state ${newParentId} was not found.`); }
+  if (parent && (parent.kind === 'final' || parent.kind === 'history')) { throw new Error(`${parent.kind} cannot contain child states.`); }
+  if (parent && parent.start >= source.start && parent.end <= source.end) { throw new Error('A state cannot be moved into one of its descendants.'); }
+  if (parent && getStateDepth(text, newParentId) >= 64) { throw new Error('The editor supports a maximum state nesting depth of 64.'); }
+
+  const oldParent = findImmediateParent(text, source);
+  if ((oldParent?.id ?? '') === newParentId) { return text; }
 
   let removeStart = source.start;
   while (removeStart > 0 && (text[removeStart - 1] === ' ' || text[removeStart - 1] === '\t')) { removeStart--; }
   if (removeStart > 0 && text[removeStart - 1] === '\n') { removeStart--; }
+  let removeEnd = source.end;
+  if (removeEnd < text.length && text[removeEnd] === '\r') { removeEnd++; }
+  if (removeEnd < text.length && text[removeEnd] === '\n') { removeEnd++; }
+
   const sourceXml = text.slice(source.start, source.end);
-  let without = text.slice(0, removeStart) + text.slice(source.end);
+  let without = text.slice(0, removeStart) + text.slice(removeEnd);
+  if (oldParent) {
+    const refreshedOldParent = findState(without, oldParent.id);
+    if (refreshedOldParent) {
+      const changedTag = refreshedOldParent.tag.replace(new RegExp(`(\\sinitial\\s*=\\s*)(["'])${escapeRegExp(stateId)}\\2`, 'i'), '');
+      without = without.slice(0, refreshedOldParent.start) + changedTag + without.slice(refreshedOldParent.openEnd);
+    }
+  } else {
+    const root = /<scxml\b[^>]*>/i.exec(without);
+    if (root) {
+      const changed = root[0].replace(new RegExp(`(\\sinitial\\s*=\\s*)(["'])${escapeRegExp(stateId)}\\2`, 'i'), '');
+      without = without.slice(0, root.index) + changed + without.slice(root.index + root[0].length);
+    }
+  }
+
+  if (!newParentId) {
+    const rootClose = without.lastIndexOf('</scxml>');
+    if (rootClose < 0) { throw new Error('The SCXML closing element was not found.'); }
+    const normalized = normalizeIndent(sourceXml, '  ');
+    const separator = rootClose > 0 && without[rootClose - 1] === '\n' ? '' : '\n';
+    return without.slice(0, rootClose) + separator + normalized + '\n' + without.slice(rootClose);
+  }
+
   const destination = findState(without, newParentId);
   if (!destination) { throw new Error(`Destination state ${newParentId} was not found after moving the source.`); }
-
   const parentLine = without.lastIndexOf('\n', destination.start) + 1;
   const parentIndent = without.slice(parentLine, destination.start).match(/^[ \t]*/)?.[0] ?? '';
-  const childIndent = parentIndent + '  ';
-  const sourceLine = text.lastIndexOf('\n', source.start) + 1;
-  const sourceIndent = text.slice(sourceLine, source.start).match(/^[ \t]*/)?.[0] ?? '';
-  const normalized = sourceXml.split('\n').map((line, index) => {
-    const stripped = line.startsWith(sourceIndent) ? line.slice(sourceIndent.length) : line.trimStart();
-    return index === 0 ? childIndent + stripped : childIndent + stripped;
-  }).join('\n');
+  const normalized = normalizeIndent(sourceXml, parentIndent + '  ');
 
   if (/\/\s*>$/.test(destination.tag)) {
     const open = destination.tag.replace(/\/\s*>$/, '>');
@@ -242,5 +264,26 @@ export function reparentState(text: string, request: ReparentStateRequest): stri
   }
   const close = `</${destination.kind}>`;
   const closeStart = destination.end - close.length;
-  return without.slice(0, closeStart) + `\n${normalized}\n${parentIndent}` + without.slice(closeStart);
+  return without.slice(0, closeStart) + `${normalized}\n${parentIndent}` + without.slice(closeStart);
+}
+
+function normalizeIndent(xml: string, indent: string): string {
+  const lines = xml.split(/\r?\n/);
+  const nonBlank = lines.filter(line => line.trim().length > 0);
+  const common = nonBlank.length ? Math.min(...nonBlank.map(line => line.match(/^[ \t]*/)?.[0].length ?? 0)) : 0;
+  return lines.map(line => indent + line.slice(Math.min(common, line.length))).join('\n');
+}
+
+function findImmediateParent(text: string, source: { start: number; end: number }): { id: string; start: number; end: number } | undefined {
+  const pattern = new RegExp(`<(${stateTags})\\b[^>]*\\bid\\s*=\\s*(["'])(.*?)\\2[^>]*>`, 'gi');
+  let match: RegExpExecArray | null;
+  let best: { id: string; start: number; end: number } | undefined;
+  while ((match = pattern.exec(text)) && match.index < source.start) {
+    const candidate = findState(text, match[3]);
+    if (!candidate || candidate.start === source.start) { continue; }
+    if (candidate.start < source.start && candidate.end >= source.end && (!best || candidate.start > best.start)) {
+      best = { id: match[3], start: candidate.start, end: candidate.end };
+    }
+  }
+  return best;
 }

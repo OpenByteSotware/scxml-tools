@@ -188,8 +188,11 @@ function renderPage(model: ScxmlModel, fileName: string, savedLayout: Layout, se
     return state.children.slice(0, -1).map((child, index) => {
       const childPosition = positions.get(child.id)!; const childSize = dimensions.get(child.id)!;
       const nextPosition = positions.get(state.children[index + 1].id)!;
-      const x = ((childPosition.x + childSize.width) + nextPosition.x) / 2 - parentPosition.x;
-      return `<line class="parallel-region-divider" x1="${x}" y1="68" x2="${x}" y2="${dimensions.get(state.id)!.height}"/>`;
+      const parentSize = dimensions.get(state.id)!;
+      const x = ((childPosition.x + childSize.width) + nextPosition.x) / 2;
+      const y1 = parentPosition.y + 68;
+      const y2 = parentPosition.y + parentSize.height;
+      return `<line class="parallel-region-divider" data-parallel="${escapeHtml(state.id)}" x1="${x}" y1="${y1}" x2="${x}" y2="${y2}"/>`;
     });
   }).join('');
   const initialPseudoStates: string[] = [];

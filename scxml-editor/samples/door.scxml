@@ -48,5 +48,12 @@
   <state id="ss6">  </state>
   <state id="t6">
     <transition event="t1t" cond="isOk()" target="s3"/>
+      <state id="t7"/>
   </state>
+
+  <parallel id="Par12">
+    <state id="par12_sub1"/>
+  
+    <state id="par12_sub2"/>
+  </parallel>
 </scxml>

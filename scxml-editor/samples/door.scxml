@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="DoorController" initial="closed">
   <state id="closed">
-    <onentry>
+        <onentry>
       <log label="label" expr="expression"/>
-      <raise event="event.name"/>
+            <raise event="event.name"/>
+      <foreach array="items" item="item" index="index">
+        <log label="item" expr="item"/>
+      </foreach>
     </onentry>
     <transition event="e4" target="s3"/>
     <transition event="e2" target="staate2"/><transition event="open" target="opened"/>
@@ -49,7 +52,6 @@
   
     <state id="ss45"/>
   
-    <history id="ph1" type="deep"></history>
   </parallel>
 
   <state id="sss4"/>

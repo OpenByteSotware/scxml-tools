@@ -190,3 +190,19 @@ suite('Stage 3 conditional and iterative executable content', () => {
     assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<if cond="x"><else/><elseif cond="y"/></if>` }), /after else/);
   });
 });
+
+suite('State and history deletion', () => {
+  test('deletes nested history and clears references to it', () => {
+    const source = `<scxml><state id="parent"><history id="recent" type="shallow"><transition target="child"/></history><state id="child"><transition target="recent"/></state></state></scxml>`;
+    const changed = deleteState(source, 'recent');
+    assert.doesNotMatch(changed, /<history\b/);
+    assert.doesNotMatch(changed, /target="recent"/);
+    assert.match(changed, /<state id="child">/);
+  });
+  test('deletes a compound state as one subtree', () => {
+    const source = `<scxml><state id="outer"><state id="inner"><history id="memory" type="deep"/></state></state><state id="other"/></scxml>`;
+    const changed = deleteState(source, 'outer');
+    assert.doesNotMatch(changed, /id="outer"|id="inner"|id="memory"/);
+    assert.match(changed, /id="other"/);
+  });
+});

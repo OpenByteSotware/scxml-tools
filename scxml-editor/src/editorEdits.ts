@@ -455,7 +455,7 @@ export interface ExecutableContentUpdate {
   xml: string;
 }
 
-const executableElementNames = new Set(['raise', 'log', 'assign', 'script']);
+const executableElementNames = new Set(['raise', 'log', 'assign', 'script', 'if', 'elseif', 'else', 'foreach']);
 
 export function readExecutableContent(text: string, stateId: string, location: ExecutableContentLocation, transitionIndex = 0): string {
   const state = findState(text, stateId);
@@ -489,7 +489,7 @@ function validateExecutableFragment(xml: string): void {
   for (const tag of tags) {
     const name = tag[1].includes(':') ? tag[1] : tag[1].toLowerCase();
     if (!tag[0].startsWith('</') && !executableElementNames.has(name) && !name.includes(':')) {
-      throw new Error(`Stage 2 supports raise, log, assign, script, and namespaced extension actions; found ${tag[1]}.`);
+      throw new Error(`Executable content supports raise, log, assign, script, if, elseif, else, foreach, and namespaced extension actions; found ${tag[1]}.`);
     }
   }
   const stack: string[] = [];
@@ -511,6 +511,45 @@ function validateExecutableFragment(xml: string): void {
   for (const match of withoutComments.matchAll(/<script\b([^>]*)\/?\s*>/gi)) {
     const source = /\bsrc\s*=/.test(match[1]);
     if (source && !/\/\s*>$/.test(match[0])) { throw new Error('A script with src must not also contain inline script content.'); }
+  }
+  for (const match of withoutComments.matchAll(/<if\b([^>]*)>/gi)) {
+    if (!/\bcond\s*=/.test(match[1])) { throw new Error('if requires a cond attribute.'); }
+    if (/\/\s*>$/.test(match[0])) { throw new Error('if must contain executable content and use a closing if element.'); }
+  }
+  for (const match of withoutComments.matchAll(/<elseif\b([^>]*)\/?\s*>/gi)) {
+    if (!/\bcond\s*=/.test(match[1])) { throw new Error('elseif requires a cond attribute.'); }
+    if (!/\/\s*>$/.test(match[0])) { throw new Error('elseif must be empty and self-closing.'); }
+  }
+  for (const match of withoutComments.matchAll(/<else\b([^>]*)\/?\s*>/gi)) {
+    if (!/\/\s*>$/.test(match[0])) { throw new Error('else must be empty and self-closing.'); }
+  }
+  for (const match of withoutComments.matchAll(/<foreach\b([^>]*)>/gi)) {
+    if (!/\barray\s*=/.test(match[1])) { throw new Error('foreach requires an array attribute.'); }
+    if (!/\bitem\s*=/.test(match[1])) { throw new Error('foreach requires an item attribute.'); }
+    if (/\/\s*>$/.test(match[0])) { throw new Error('foreach must contain executable content and use a closing foreach element.'); }
+  }
+  validateConditionalPlacement(withoutComments);
+}
+
+
+function validateConditionalPlacement(xml: string): void {
+  const tokenPattern = /<\/?([A-Za-z_][\w:.-]*)\b[^>]*>/g;
+  const stack: Array<{ name: string; elseSeen: boolean }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = tokenPattern.exec(xml))) {
+    const token = match[0];
+    const name = match[1].toLowerCase();
+    const closing = token.startsWith('</');
+    const selfClosing = /\/\s*>$/.test(token);
+    if (closing) { stack.pop(); continue; }
+    if (name === 'elseif' || name === 'else') {
+      const parentIf = [...stack].reverse().find(entry => entry.name === 'if');
+      if (!parentIf || stack[stack.length - 1] !== parentIf) { throw new Error(`${name} must be a direct child of if.`); }
+      if (parentIf.elseSeen) { throw new Error(`${name} cannot appear after else.`); }
+      if (name === 'else') { parentIf.elseSeen = true; }
+      continue;
+    }
+    if (!selfClosing) { stack.push({ name, elseSeen: false }); }
   }
 }
 

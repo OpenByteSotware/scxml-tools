@@ -132,6 +132,16 @@ export function parseScxml(text: string): ScxmlModel {
   for (const match of text.matchAll(/<script\b([^>]*)>/gi)) {
     if (/\bsrc\s*=/.test(match[1]) && !/\/\s*>$/.test(match[0])) { errors.push('script with src must be empty and cannot contain inline content.'); }
   }
+  for (const match of text.matchAll(/<if\b([^>]*)>/gi)) {
+    if (!/\bcond\s*=/.test(match[1])) { errors.push('if requires a cond attribute.'); }
+  }
+  for (const match of text.matchAll(/<elseif\b([^>]*)\/?\s*>/gi)) {
+    if (!/\bcond\s*=/.test(match[1])) { errors.push('elseif requires a cond attribute.'); }
+  }
+  for (const match of text.matchAll(/<foreach\b([^>]*)>/gi)) {
+    if (!/\barray\s*=/.test(match[1])) { errors.push('foreach requires an array attribute.'); }
+    if (!/\bitem\s*=/.test(match[1])) { errors.push('foreach requires an item attribute.'); }
+  }
 
   const version = root['@_version'];
   const namespace = root['@_xmlns'];

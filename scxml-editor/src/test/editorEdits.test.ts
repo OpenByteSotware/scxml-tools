@@ -171,3 +171,22 @@ suite('Stage 2 executable content', () => {
     assert.doesNotMatch(changed, /<onentry>/);
   });
 });
+
+suite('Stage 3 conditional and iterative executable content', () => {
+  test('accepts nested if, elseif, else, and foreach actions', () => {
+    const xml = `<if cond="ready"><log label="ready" expr="count"/><elseif cond="waiting"/><raise event="wait"/><else/><foreach array="items" item="item" index="index"><assign location="last" expr="item"/></foreach></if>`;
+    const changed = updateExecutableContent(`<scxml><state id="a"/></scxml>`, { stateId: 'a', location: 'onentry', xml });
+    assert.match(changed, /<if cond="ready">[\s\S]*<elseif cond="waiting"\/>[\s\S]*<else\/>[\s\S]*<foreach array="items" item="item" index="index">/);
+  });
+  test('requires conditions and foreach collection variables', () => {
+    const base = `<scxml><state id="a"/></scxml>`;
+    assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<if><raise event="x"/></if>` }), /cond attribute/);
+    assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<foreach item="item"><log expr="item"/></foreach>` }), /array attribute/);
+    assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<foreach array="items"><log expr="item"/></foreach>` }), /item attribute/);
+  });
+  test('rejects else and elseif outside a direct if branch', () => {
+    const base = `<scxml><state id="a"/></scxml>`;
+    assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<else/>` }), /direct child of if/);
+    assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<if cond="x"><else/><elseif cond="y"/></if>` }), /after else/);
+  });
+});

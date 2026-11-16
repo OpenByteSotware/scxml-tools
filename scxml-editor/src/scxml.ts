@@ -2,7 +2,7 @@ import { XMLParser, XMLValidator } from 'fast-xml-parser';
 
 export type StateKind = 'state' | 'parallel' | 'final' | 'history';
 export interface Transition { event?: string; cond?: string; targets: string[]; }
-export interface StateNode { id: string; kind: StateKind; initial?: string; children: StateNode[]; transitions: Transition[]; }
+export interface StateNode { id: string; kind: StateKind; initial?: string; historyType?: 'shallow' | 'deep'; children: StateNode[]; transitions: Transition[]; }
 export interface ScxmlModel { name?: string; initial?: string; states: StateNode[]; ids: Set<string>; errors: string[]; }
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', preserveOrder: false, trimValues: false });
@@ -33,7 +33,7 @@ export function parseScxml(text: string): ScxmlModel {
       event: transition?.['@_event'], cond: transition?.['@_cond'],
       targets: String(transition?.['@_target'] ?? '').split(/\s+/).filter(Boolean)
     }));
-    return { id, kind, initial: raw?.['@_initial'], children, transitions };
+    return { id, kind, initial: raw?.['@_initial'], historyType: kind === 'history' ? (raw?.['@_type'] === 'deep' ? 'deep' : 'shallow') : undefined, children, transitions };
   };
 
   const states: StateNode[] = [];
@@ -48,6 +48,12 @@ export function parseScxml(text: string): ScxmlModel {
     if (state.kind !== 'parallel' && initialTargets.length > 1) { errors.push(`State ${state.id} must define at most one initial child.`); }
     initialTargets.filter(target => !state.children.some(child => child.id === target)).forEach(target => errors.push(`State ${state.id} has invalid initial child ${target}.`));
     if (state.kind === 'parallel' && state.initial) { errors.push(`Parallel state ${state.id} must not define an initial attribute; all direct regions are entered.`); }
+    if (state.kind === 'history') {
+      if (depth === 0) { errors.push(`History ${state.id} must be a child of state or parallel.`); }
+      if (state.children.length) { errors.push(`History ${state.id} cannot contain child states.`); }
+      if (state.transitions.length > 1) { errors.push(`History ${state.id} may contain at most one default transition.`); }
+      if (state.transitions[0] && state.transitions[0].targets.length < 1) { errors.push(`History ${state.id} default transition requires a target.`); }
+    }
     if (state.kind === 'parallel') {
       if (state.children.length < 2) { errors.push(`Parallel state ${state.id} should contain at least two regions.`); }
       state.children.forEach(region => {

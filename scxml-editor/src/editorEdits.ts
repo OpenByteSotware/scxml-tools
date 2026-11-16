@@ -217,6 +217,53 @@ export function createParallelRegion(text: string, region: NewParallelRegion): s
   return text.slice(0, closeStart) + `\n${element}\n${parentIndent}` + text.slice(closeStart);
 }
 
+
+export interface NewHistoryState { parentId: string; id: string; historyType: 'shallow' | 'deep'; defaultTarget?: string; }
+export interface HistoryUpdate { id: string; historyType: 'shallow' | 'deep'; defaultTarget?: string; }
+
+export function createHistoryState(text: string, history: NewHistoryState): string {
+  const parentId = String(history.parentId ?? '').trim();
+  const id = String(history.id ?? '').trim();
+  const type = history.historyType === 'deep' ? 'deep' : 'shallow';
+  const target = String(history.defaultTarget ?? '').trim();
+  if (!parentId || !id) { throw new Error('History parent and ID are required.'); }
+  if (findState(text, id)) { throw new Error(`State ${id} already exists.`); }
+  const parent = findState(text, parentId);
+  if (!parent) { throw new Error(`History parent ${parentId} was not found.`); }
+  if (parent.kind !== 'state' && parent.kind !== 'parallel') { throw new Error('History may only be added to state or parallel containers.'); }
+  if (target && !findState(text, target)) { throw new Error(`Default history target ${target} was not found.`); }
+  const parentLine = text.lastIndexOf('\n', parent.start) + 1;
+  const parentIndent = text.slice(parentLine, parent.start).match(/^[ \t]*/)?.[0] ?? '';
+  const indent = parentIndent + '  ';
+  const transition = target ? `\n${indent}  <transition target="${escapeXml(target)}"/>\n${indent}` : '';
+  const element = `${indent}<history id="${escapeXml(id)}" type="${type}">${transition}</history>`;
+  if (/\/\s*>$/.test(parent.tag)) {
+    const open = parent.tag.replace(/\/\s*>$/, '>');
+    return text.slice(0, parent.start) + `${open}\n${element}\n${parentIndent}</${parent.kind}>` + text.slice(parent.openEnd);
+  }
+  const close = `</${parent.kind}>`; const closeStart = parent.end - close.length;
+  return text.slice(0, closeStart) + `\n${element}\n${parentIndent}` + text.slice(closeStart);
+}
+
+export function updateHistoryState(text: string, update: HistoryUpdate): string {
+  const found = findState(text, update.id);
+  if (!found || found.kind !== 'history') { throw new Error(`History ${update.id} was not found.`); }
+  let tag = setAttribute(found.tag, 'type', update.historyType === 'deep' ? 'deep' : 'shallow');
+  let result = text.slice(0, found.start) + tag + text.slice(found.openEnd);
+  const refreshed = findState(result, update.id)!;
+  const target = String(update.defaultTarget ?? '').trim();
+  if (target && !findState(result, target)) { throw new Error(`Default history target ${target} was not found.`); }
+  const body = result.slice(refreshed.openEnd, refreshed.end);
+  const transition = /<transition\b[^>]*\/?\s*>/i.exec(body);
+  if (transition) {
+    const changed = setAttribute(transition[0], 'target', target);
+    const start = refreshed.openEnd + transition.index;
+    return result.slice(0, start) + changed + result.slice(start + transition[0].length);
+  }
+  if (!target) { return result; }
+  const close = '</history>'; const closeStart = refreshed.end - close.length;
+  return result.slice(0, closeStart) + `\n    <transition target="${escapeXml(target)}"/>\n  ` + result.slice(closeStart);
+}
 export function getStateDepth(text: string, id: string): number {
   const target = findState(text, id);
   if (!target) { throw new Error(`State ${id} was not found.`); }

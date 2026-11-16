@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createChildState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, reparentState, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, reparentState, updateHistoryState, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -103,5 +103,20 @@ suite('Initial state scopes', () => {
     const source = `<scxml><parallel id="p"><state id="r1"/><state id="r2"/></parallel></scxml>`;
     const changed = updateState(source, { oldId: 'r2', id: 'r2', kind: 'state', initial: true });
     assert.doesNotMatch(changed, /<parallel[^>]*initial=/);
+  });
+});
+
+suite('SCXML history states', () => {
+  test('creates shallow history with a default transition', () => {
+    const source = `<scxml><state id="parent"><state id="one"/></state></scxml>`;
+    const changed = createHistoryState(source, { parentId: 'parent', id: 'recent', historyType: 'shallow', defaultTarget: 'one' });
+    assert.match(changed, /<history id="recent" type="shallow">[\s\S]*<transition target="one"\/>[\s\S]*<\/history>/);
+  });
+  test('creates and updates deep history', () => {
+    let text = `<scxml><state id="parent"><state id="one"/></state></scxml>`;
+    text = createHistoryState(text, { parentId: 'parent', id: 'memory', historyType: 'shallow' });
+    text = updateHistoryState(text, { id: 'memory', historyType: 'deep', defaultTarget: 'one' });
+    assert.match(text, /<history id="memory" type="deep">/);
+    assert.match(text, /target="one"/);
   });
 });

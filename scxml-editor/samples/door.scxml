@@ -40,6 +40,8 @@
     <state id="ss3par"/>
   
     <state id="ss45"/>
+  
+    <history id="ph1" type="deep"></history>
   </parallel>
 
   <state id="sss4"/>
@@ -49,6 +51,8 @@
   <state id="t6">
     <transition event="t1t" cond="isOk()" target="s3"/>
       <state id="t7"/>
+  
+    <history id="h1" type="shallow"></history>
   </state>
 
   <parallel id="Par12">

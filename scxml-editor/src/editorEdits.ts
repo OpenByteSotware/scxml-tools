@@ -362,3 +362,86 @@ function findImmediateParent(text: string, source: { start: number; end: number 
   }
   return best;
 }
+
+export interface RootPropertiesUpdate {
+  name?: string;
+  version: string;
+  namespace: string;
+  datamodel?: string;
+  binding?: string;
+  xmlBase?: string;
+  initialTarget?: string;
+  explicitInitial: boolean;
+  initialCond?: string;
+}
+
+export interface ExplicitInitialUpdate {
+  scopeId?: string;
+  target: string;
+  cond?: string;
+  explicit: boolean;
+}
+
+export function updateRootProperties(text: string, update: RootPropertiesUpdate): string {
+  const root = /<scxml\b[^>]*>/i.exec(text);
+  if (!root) { throw new Error('The SCXML root element was not found.'); }
+  const target = String(update.initialTarget ?? '').trim();
+  if (target && !findState(text, target)) { throw new Error(`Initial target ${target} was not found.`); }
+  let tag = root[0];
+  tag = setAttribute(tag, 'version', update.version.trim() || '1.0');
+  tag = setAttribute(tag, 'xmlns', update.namespace.trim() || 'http://www.w3.org/2005/07/scxml');
+  tag = setAttribute(tag, 'name', String(update.name ?? '').trim());
+  tag = setAttribute(tag, 'datamodel', String(update.datamodel ?? '').trim());
+  tag = setAttribute(tag, 'binding', String(update.binding ?? '').trim());
+  tag = setAttribute(tag, 'xml:base', String(update.xmlBase ?? '').trim());
+  tag = setAttribute(tag, 'initial', update.explicitInitial ? '' : target);
+  let result = text.slice(0, root.index) + tag + text.slice(root.index + root[0].length);
+  return setExplicitInitialElement(result, undefined, target, String(update.initialCond ?? '').trim(), update.explicitInitial);
+}
+
+export function updateExplicitInitial(text: string, update: ExplicitInitialUpdate): string {
+  const target = String(update.target ?? '').trim();
+  if (!target) { throw new Error('Initial transition target is required.'); }
+  if (!findState(text, target)) { throw new Error(`Initial target ${target} was not found.`); }
+  return setExplicitInitialElement(text, update.scopeId, target, String(update.cond ?? '').trim(), update.explicit);
+}
+
+function setExplicitInitialElement(text: string, scopeId: string | undefined, target: string, cond: string, explicit: boolean): string {
+  const scope = scopeId ? findState(text, scopeId) : undefined;
+  const root = !scopeId ? /<scxml\b[^>]*>/i.exec(text) : undefined;
+  if (scopeId && !scope) { throw new Error(`State ${scopeId} was not found.`); }
+  const openStart = scope ? scope.start : root!.index;
+  const openEnd = scope ? scope.openEnd : root!.index + root![0].length;
+  const closeName = scope ? scope.kind : 'scxml';
+  const scopeEnd = scope ? scope.end : text.lastIndexOf('</scxml>') + '</scxml>'.length;
+  let openTag = scope ? scope.tag : root![0];
+  openTag = setAttribute(openTag, 'initial', explicit ? '' : target);
+  let result = text.slice(0, openStart) + openTag + text.slice(openEnd);
+  const delta = openTag.length - (scope ? scope.tag.length : root![0].length);
+  const adjustedOpenEnd = openEnd + delta;
+  const adjustedScopeEnd = scopeEnd + delta;
+  const body = result.slice(adjustedOpenEnd, adjustedScopeEnd);
+  const initialPattern = /<initial\b[^>]*>[\s\S]*?<\/initial\s*>/i;
+  const existing = initialPattern.exec(body);
+  if (!explicit) {
+    if (!existing) { return result; }
+    const start = adjustedOpenEnd + existing.index;
+    return result.slice(0, start) + result.slice(start + existing[0].length);
+  }
+  if (!target) { throw new Error('Explicit initial transition requires a target.'); }
+  let transition = '<transition/>';
+  transition = setAttribute(transition, 'target', target);
+  transition = setAttribute(transition, 'cond', cond);
+  const lineStart = result.lastIndexOf('\n', openStart) + 1;
+  const parentIndent = result.slice(lineStart, openStart).match(/^[ \t]*/)?.[0] ?? '';
+  const element = `${parentIndent}  <initial>\n${parentIndent}    ${transition}\n${parentIndent}  </initial>`;
+  if (existing) {
+    const start = adjustedOpenEnd + existing.index;
+    return result.slice(0, start) + element + result.slice(start + existing[0].length);
+  }
+  if (/\/\s*>$/.test(openTag)) {
+    const expanded = openTag.replace(/\/\s*>$/, '>');
+    return result.slice(0, openStart) + `${expanded}\n${element}\n${parentIndent}</${closeName}>` + result.slice(adjustedOpenEnd);
+  }
+  return result.slice(0, adjustedOpenEnd) + `\n${element}` + result.slice(adjustedOpenEnd);
+}

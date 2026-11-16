@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, reparentState, updateHistoryState, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, reparentState, updateExplicitInitial, updateHistoryState, updateRootProperties, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -118,5 +118,31 @@ suite('SCXML history states', () => {
     text = updateHistoryState(text, { id: 'memory', historyType: 'deep', defaultTarget: 'one' });
     assert.match(text, /<history id="memory" type="deep">/);
     assert.match(text, /target="one"/);
+  });
+});
+
+suite('Stage 1 root properties and explicit initial transitions', () => {
+  test('updates SCXML root properties', () => {
+    const source = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"><state id="idle"/></scxml>`;
+    const changed = updateRootProperties(source, { name: 'Machine', version: '1.0', namespace: 'http://www.w3.org/2005/07/scxml', datamodel: 'ecmascript', binding: 'late', xmlBase: 'machines/', initialTarget: 'idle', explicitInitial: false });
+    assert.match(changed, /name="Machine"/);
+    assert.match(changed, /datamodel="ecmascript"/);
+    assert.match(changed, /binding="late"/);
+    assert.match(changed, /xml:base="machines\/"/);
+    assert.match(changed, /initial="idle"/);
+  });
+  test('creates an explicit root initial transition', () => {
+    const source = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="idle"><state id="idle"/></scxml>`;
+    const changed = updateRootProperties(source, { version: '1.0', namespace: 'http://www.w3.org/2005/07/scxml', initialTarget: 'idle', explicitInitial: true, initialCond: 'ready' });
+    assert.doesNotMatch(changed, /<scxml[^>]* initial=/);
+    assert.match(changed, /<initial>[\s\S]*<transition target="idle" cond="ready"\/>[\s\S]*<\/initial>/);
+  });
+  test('creates and removes a compound-state explicit initial transition', () => {
+    const source = `<scxml><state id="parent" initial="one"><state id="one"/><state id="two"/></state></scxml>`;
+    const explicit = updateExplicitInitial(source, { scopeId: 'parent', target: 'two', cond: 'enabled', explicit: true });
+    assert.match(explicit, /<state id="parent">[\s\S]*<initial>[\s\S]*target="two" cond="enabled"/);
+    const attribute = updateExplicitInitial(explicit, { scopeId: 'parent', target: 'one', explicit: false });
+    assert.match(attribute, /<state id="parent" initial="one">/);
+    assert.doesNotMatch(attribute, /<initial>/);
   });
 });

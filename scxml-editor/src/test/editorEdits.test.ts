@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, reparentState, updateExplicitInitial, updateHistoryState, updateRootProperties, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readExecutableContent, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateRootProperties, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -144,5 +144,30 @@ suite('Stage 1 root properties and explicit initial transitions', () => {
     const attribute = updateExplicitInitial(explicit, { scopeId: 'parent', target: 'one', explicit: false });
     assert.match(attribute, /<state id="parent" initial="one">/);
     assert.doesNotMatch(attribute, /<initial>/);
+  });
+});
+
+suite('Stage 2 executable content', () => {
+  test('adds ordered onentry and onexit actions', () => {
+    let text = `<scxml><state id="idle"/></scxml>`;
+    text = updateExecutableContent(text, { stateId: 'idle', location: 'onentry', xml: `<log label="enter" expr="count"/>\n<raise event="ready"/>` });
+    text = updateExecutableContent(text, { stateId: 'idle', location: 'onexit', xml: `<assign location="count" expr="count + 1"/>` });
+    assert.match(text, /<onentry>[\s\S]*<log[\s\S]*<raise[\s\S]*<\/onentry>/);
+    assert.match(text, /<onexit>[\s\S]*<assign[\s\S]*<\/onexit>/);
+    assert.match(readExecutableContent(text, 'idle', 'onentry'), /^<log[\s\S]*<raise/);
+  });
+  test('adds executable actions to a transition and preserves attributes', () => {
+    const source = `<scxml><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
+    const changed = updateExecutableContent(source, { stateId: 'a', location: 'transition', transitionIndex: 0, xml: `<log label="route" expr="_event.name"/>` });
+    assert.match(changed, /<transition event="go" target="b">[\s\S]*<log[\s\S]*<\/transition>/);
+  });
+  test('validates required action attributes', () => {
+    assert.throws(() => updateExecutableContent(`<scxml><state id="a"/></scxml>`, { stateId: 'a', location: 'onentry', xml: `<raise/>` }), /event attribute/);
+    assert.throws(() => updateExecutableContent(`<scxml><state id="a"/></scxml>`, { stateId: 'a', location: 'onentry', xml: `<assign expr="1"/>` }), /location attribute/);
+  });
+  test('removes an executable block when cleared', () => {
+    const source = `<scxml><state id="a"><onentry><raise event="go"/></onentry></state></scxml>`;
+    const changed = updateExecutableContent(source, { stateId: 'a', location: 'onentry', xml: '' });
+    assert.doesNotMatch(changed, /<onentry>/);
   });
 });

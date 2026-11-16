@@ -445,3 +445,156 @@ function setExplicitInitialElement(text: string, scopeId: string | undefined, ta
   }
   return result.slice(0, adjustedOpenEnd) + `\n${element}` + result.slice(adjustedOpenEnd);
 }
+
+
+export type ExecutableContentLocation = 'onentry' | 'onexit' | 'transition';
+export interface ExecutableContentUpdate {
+  stateId: string;
+  location: ExecutableContentLocation;
+  transitionIndex?: number;
+  xml: string;
+}
+
+const executableElementNames = new Set(['raise', 'log', 'assign', 'script']);
+
+export function readExecutableContent(text: string, stateId: string, location: ExecutableContentLocation, transitionIndex = 0): string {
+  const state = findState(text, stateId);
+  if (!state) { throw new Error(`State ${stateId} was not found.`); }
+  const body = text.slice(state.openEnd, state.end - (state.end > state.openEnd ? (`</${state.kind}>`).length : 0));
+  if (location === 'transition') {
+    const transition = findDirectChildElement(body, 'transition', transitionIndex);
+    return transition ? transition.inner.trim() : '';
+  }
+  const block = findDirectChildElement(body, location, 0);
+  return block ? block.inner.trim() : '';
+}
+
+export function updateExecutableContent(text: string, update: ExecutableContentUpdate): string {
+  const state = findState(text, update.stateId);
+  if (!state) { throw new Error(`State ${update.stateId} was not found.`); }
+  if (state.kind === 'history' && update.location !== 'transition') { throw new Error('History states do not support onentry or onexit content.'); }
+  const xml = String(update.xml ?? '').trim();
+  validateExecutableFragment(xml);
+  if (update.location === 'transition') {
+    return replaceTransitionExecutableContent(text, state, update.transitionIndex ?? 0, xml);
+  }
+  return replaceStateExecutableBlock(text, state, update.location, xml);
+}
+
+function validateExecutableFragment(xml: string): void {
+  if (!xml) { return; }
+  const withoutComments = xml.replace(/<!--[\s\S]*?-->/g, '');
+  const tags = [...withoutComments.matchAll(/<\/?([A-Za-z_][\w:.-]*)\b[^>]*>/g)];
+  if (!tags.length) { throw new Error('Executable content must contain SCXML action elements.'); }
+  for (const tag of tags) {
+    const name = tag[1].includes(':') ? tag[1] : tag[1].toLowerCase();
+    if (!tag[0].startsWith('</') && !executableElementNames.has(name) && !name.includes(':')) {
+      throw new Error(`Stage 2 supports raise, log, assign, script, and namespaced extension actions; found ${tag[1]}.`);
+    }
+  }
+  const stack: string[] = [];
+  for (const tag of tags) {
+    const closing = tag[0].startsWith('</');
+    const selfClosing = /\/\s*>$/.test(tag[0]);
+    const name = tag[1];
+    if (closing) {
+      if (stack.pop() !== name) { throw new Error(`Executable content has a mismatched closing tag: ${name}.`); }
+    } else if (!selfClosing) { stack.push(name); }
+  }
+  if (stack.length) { throw new Error(`Executable content has an unclosed element: ${stack[stack.length - 1]}.`); }
+  for (const match of withoutComments.matchAll(/<raise\b([^>]*)\/?\s*>/gi)) {
+    if (!/\bevent\s*=/.test(match[1])) { throw new Error('raise requires an event attribute.'); }
+  }
+  for (const match of withoutComments.matchAll(/<assign\b([^>]*)\/?\s*>/gi)) {
+    if (!/\blocation\s*=/.test(match[1])) { throw new Error('assign requires a location attribute.'); }
+  }
+  for (const match of withoutComments.matchAll(/<script\b([^>]*)\/?\s*>/gi)) {
+    const source = /\bsrc\s*=/.test(match[1]);
+    if (source && !/\/\s*>$/.test(match[0])) { throw new Error('A script with src must not also contain inline script content.'); }
+  }
+}
+
+function replaceStateExecutableBlock(text: string, state: ReturnType<typeof findState> & {}, location: 'onentry' | 'onexit', xml: string): string {
+  const close = `</${state.kind}>`;
+  if (/\/\s*>$/.test(state.tag)) {
+    if (!xml) { return text; }
+    const lineStart = text.lastIndexOf('\n', state.start) + 1;
+    const indent = text.slice(lineStart, state.start).match(/^[ \t]*/)?.[0] ?? '';
+    const open = state.tag.replace(/\/\s*>$/, '>');
+    const block = formatExecutableBlock(location, xml, indent + '  ');
+    return text.slice(0, state.start) + `${open}\n${block}\n${indent}${close}` + text.slice(state.openEnd);
+  }
+  const bodyStart = state.openEnd;
+  const bodyEnd = state.end - close.length;
+  const body = text.slice(bodyStart, bodyEnd);
+  const existing = findDirectChildElement(body, location, 0);
+  if (existing) {
+    const start = bodyStart + existing.start;
+    if (!xml) { return text.slice(0, start) + text.slice(bodyStart + existing.end); }
+    const lineStart = text.lastIndexOf('\n', start) + 1;
+    const indent = text.slice(lineStart, start).match(/^[ \t]*/)?.[0] ?? '';
+    const replacement = formatExecutableBlock(location, xml, indent);
+    return text.slice(0, start) + replacement + text.slice(bodyStart + existing.end);
+  }
+  if (!xml) { return text; }
+  const lineStart = text.lastIndexOf('\n', state.start) + 1;
+  const parentIndent = text.slice(lineStart, state.start).match(/^[ \t]*/)?.[0] ?? '';
+  const block = formatExecutableBlock(location, xml, parentIndent + '  ');
+  return location === 'onentry'
+    ? text.slice(0, bodyStart) + `\n${block}` + text.slice(bodyStart)
+    : text.slice(0, bodyEnd) + `\n${block}\n${parentIndent}` + text.slice(bodyEnd);
+}
+
+function replaceTransitionExecutableContent(text: string, state: ReturnType<typeof findState> & {}, transitionIndex: number, xml: string): string {
+  const close = state.end > state.openEnd ? `</${state.kind}>` : '';
+  const bodyStart = state.openEnd;
+  const bodyEnd = state.end - close.length;
+  const body = text.slice(bodyStart, bodyEnd);
+  const transition = findDirectChildElement(body, 'transition', transitionIndex);
+  if (!transition) { throw new Error(`Transition ${transitionIndex + 1} was not found in the selected state.`); }
+  const absoluteStart = bodyStart + transition.start;
+  const original = text.slice(absoluteStart, bodyStart + transition.end);
+  const openTag = /^<transition\b[^>]*>/i.exec(original)?.[0];
+  if (!openTag) { throw new Error('Transition opening element was not found.'); }
+  if (!xml) {
+    const emptyTag = openTag.replace(/>$/, '/>');
+    return text.slice(0, absoluteStart) + emptyTag + text.slice(bodyStart + transition.end);
+  }
+  const lineStart = text.lastIndexOf('\n', absoluteStart) + 1;
+  const indent = text.slice(lineStart, absoluteStart).match(/^[ \t]*/)?.[0] ?? '';
+  const normalizedOpen = openTag.replace(/\/\s*>$/, '>');
+  const content = indentFragment(xml, indent + '  ');
+  const replacement = `${normalizedOpen}\n${content}\n${indent}</transition>`;
+  return text.slice(0, absoluteStart) + replacement + text.slice(bodyStart + transition.end);
+}
+
+function formatExecutableBlock(location: 'onentry' | 'onexit', xml: string, indent: string): string {
+  return `${indent}<${location}>\n${indentFragment(xml, indent + '  ')}\n${indent}</${location}>`;
+}
+
+function indentFragment(xml: string, indent: string): string {
+  const lines = xml.trim().split(/\r?\n/);
+  const nonBlank = lines.filter(line => line.trim());
+  const common = nonBlank.length ? Math.min(...nonBlank.map(line => line.match(/^[ \t]*/)?.[0].length ?? 0)) : 0;
+  return lines.map(line => indent + line.slice(Math.min(common, line.length))).join('\n');
+}
+
+function findDirectChildElement(body: string, name: string, requestedIndex: number): { start: number; end: number; inner: string } | undefined {
+  const token = /<\/?(?:state|parallel|final|history|initial|transition|onentry|onexit)\b[^>]*>/gi;
+  let depth = 0; let index = 0; let match: RegExpExecArray | null;
+  while ((match = token.exec(body))) {
+    const closing = /^<\//.test(match[0]); const selfClosing = /\/\s*>$/.test(match[0]);
+    const elementName = /^<\/?([\w:-]+)/.exec(match[0])?.[1]?.toLowerCase();
+    if (closing) { depth = Math.max(0, depth - 1); continue; }
+    if (depth === 0 && elementName === name) {
+      if (index++ !== requestedIndex) { if (!selfClosing) { depth++; } continue; }
+      if (selfClosing) { return { start: match.index, end: token.lastIndex, inner: '' }; }
+      const closePattern = new RegExp(`</${name}\\s*>`, 'ig'); closePattern.lastIndex = token.lastIndex;
+      const close = closePattern.exec(body);
+      if (!close) { return undefined; }
+      return { start: match.index, end: closePattern.lastIndex, inner: body.slice(token.lastIndex, close.index) };
+    }
+    if (!selfClosing) { depth++; }
+  }
+  return undefined;
+}

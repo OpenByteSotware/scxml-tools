@@ -119,6 +119,20 @@ export function parseScxml(text: string): ScxmlModel {
   rootInitialTargets.filter(target => !states.some(state => state.id === target)).forEach(target => errors.push(`Initial state ${target} must be a direct child of scxml.`));
   if (rootInitial && !rootInitial.target) { errors.push('The SCXML explicit initial transition requires a target.'); }
 
+  for (const match of text.matchAll(/<transition\b([^>]*)>/gi)) {
+    const type = /\btype\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2];
+    if (type && type !== 'internal' && type !== 'external') { errors.push(`Transition type must be internal or external; found ${type}.`); }
+  }
+  for (const match of text.matchAll(/<raise\b([^>]*)\/?\s*>/gi)) {
+    if (!/\bevent\s*=/.test(match[1])) { errors.push('raise requires an event attribute.'); }
+  }
+  for (const match of text.matchAll(/<assign\b([^>]*)\/?\s*>/gi)) {
+    if (!/\blocation\s*=/.test(match[1])) { errors.push('assign requires a location attribute.'); }
+  }
+  for (const match of text.matchAll(/<script\b([^>]*)>/gi)) {
+    if (/\bsrc\s*=/.test(match[1]) && !/\/\s*>$/.test(match[0])) { errors.push('script with src must be empty and cannot contain inline content.'); }
+  }
+
   const version = root['@_version'];
   const namespace = root['@_xmlns'];
   const binding = root['@_binding'];

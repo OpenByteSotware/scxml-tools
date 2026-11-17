@@ -57,7 +57,14 @@
   <state id="sss4"/>
 
 
-  <state id="ss6">  </state>
+  <parallel id="ss6">
+    <onentry>
+      <assign location="test1" expr="test1=test1+1"/>
+    </onentry>  
+    <state id="ss6_p1"/>
+  
+    <state id="ss6_p2"/>
+  </parallel>
   <state id="t6">
     <transition event="t1t" cond="isOk()" target="s3"/>
       <state id="t7"/>

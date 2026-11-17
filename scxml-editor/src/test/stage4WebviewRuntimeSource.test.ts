@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Stage 4 webview runtime',()=>{test('does not emit nested interpolation fragments',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.match(s,/data-initial-mode="\$\{escapeHtml/);assert.match(s,/dataset\.initialMode\|\|'none'/);assert.match(s,/stateId:document\.body\.dataset\.selectedId/);assert.doesNotMatch(s,/\$\{'\$\{'\}/);});});

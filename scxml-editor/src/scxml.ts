@@ -3,12 +3,14 @@ import { XMLParser, XMLValidator } from 'fast-xml-parser';
 export type StateKind = 'state' | 'parallel' | 'final' | 'history';
 export interface Transition { event?: string; cond?: string; type?: 'internal' | 'external'; targets: string[]; }
 export interface InitialTransition { target?: string; cond?: string; explicit: boolean; }
+export interface DoneData { mode: 'none' | 'expr' | 'content' | 'params'; expression?: string; content?: string; params?: Array<{ name: string; expr?: string; location?: string }>; }
 export interface StateNode {
   id: string;
   kind: StateKind;
   initial?: string;
   initialTransition?: InitialTransition;
   historyType?: 'shallow' | 'deep';
+  doneData?: DoneData;
   children: StateNode[];
   transitions: Transition[];
 }
@@ -67,11 +69,18 @@ export function parseScxml(text: string): ScxmlModel {
       };
     });
     const explicitInitial = readInitial(raw);
+    const rawDone = kind === 'final' ? asArray<any>(raw?.donedata)[0] : undefined;
+    const rawContent = rawDone ? asArray<any>(rawDone.content)[0] : undefined;
+    const rawParams = rawDone ? asArray<any>(rawDone.param) : [];
+    const doneData: DoneData | undefined = !rawDone ? undefined : rawContent
+      ? (rawContent['@_expr'] !== undefined ? { mode: 'expr', expression: rawContent['@_expr'] } : { mode: 'content', content: String(rawContent['#text'] ?? '') })
+      : rawParams.length ? { mode: 'params', params: rawParams.map((param: any) => ({ name: param['@_name'] ?? '', expr: param['@_expr'], location: param['@_location'] })) } : { mode: 'none' };
     return {
       id, kind,
       initial: explicitInitial?.target || raw?.['@_initial'],
       initialTransition: explicitInitial,
       historyType: kind === 'history' ? (raw?.['@_type'] === 'deep' ? 'deep' : 'shallow') : undefined,
+      doneData,
       children, transitions
     };
   };
@@ -100,6 +109,14 @@ export function parseScxml(text: string): ScxmlModel {
       if (state.children.length) { errors.push(`History ${state.id} cannot contain child states.`); }
       if (state.transitions.length > 1) { errors.push(`History ${state.id} may contain at most one default transition.`); }
       if (state.transitions[0] && state.transitions[0].targets.length < 1) { errors.push(`History ${state.id} default transition requires a target.`); }
+    }
+    if (state.kind === 'final') {
+      if (state.children.length) { errors.push(`Final state ${state.id} cannot contain child states.`); }
+      if (state.transitions.length) { errors.push(`Final state ${state.id} cannot contain outgoing transitions.`); }
+      (state.doneData?.params ?? []).forEach(param => {
+        if (!param.name) { errors.push(`Final state ${state.id} has a done-data param without a name.`); }
+        if ((param.expr ? 1 : 0) + (param.location ? 1 : 0) !== 1) { errors.push(`Done-data param ${param.name || '(unnamed)'} must define exactly one of expr or location.`); }
+      });
     }
     if (state.kind === 'parallel') {
       if (state.children.length < 2) { errors.push(`Parallel state ${state.id} should contain at least two regions.`); }

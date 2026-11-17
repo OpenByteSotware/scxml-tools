@@ -1,5 +1,6 @@
 export interface StateUpdate { oldId: string; id: string; kind: string; initial: boolean; parallel?: boolean; }
-export interface TransitionUpdate { stateId: string; index: number; event: string; cond: string; targets: string; }
+export interface TransitionUpdate { stateId: string; index: number; event: string; cond: string; targets: string; type?: '' | 'internal' | 'external'; }
+export interface DoneDataUpdate { stateId: string; mode: 'none' | 'expr' | 'content' | 'params'; expression?: string; content?: string; params?: Array<{ name: string; expr?: string; location?: string }>; }
 
 const stateTags = 'state|parallel|final|history';
 
@@ -93,7 +94,7 @@ export function updateTransition(text: string, update: TransitionUpdate): string
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 export interface NewState { id: string; kind: string; initial: boolean; }
-export interface NewTransition { stateId: string; event: string; cond: string; targets: string; }
+export interface NewTransition { stateId: string; event: string; cond: string; targets: string; type?: '' | 'internal' | 'external'; }
 
 export function createState(text: string, state: NewState): string {
   const id = state.id.trim();
@@ -636,4 +637,71 @@ function findDirectChildElement(body: string, name: string, requestedIndex: numb
     if (!selfClosing) { depth++; }
   }
   return undefined;
+}
+
+
+export function readDoneData(text: string, stateId: string): DoneDataUpdate {
+  const state = findState(text, stateId);
+  if (!state || state.kind !== 'final') { return { stateId, mode: 'none' }; }
+  const body = text.slice(state.openEnd, state.end - '</final>'.length);
+  const done = /<donedata\b[^>]*>([\s\S]*?)<\/donedata\s*>/i.exec(body);
+  if (!done) { return { stateId, mode: 'none' }; }
+  const content = /<content\b([^>]*)>([\s\S]*?)<\/content\s*>|<content\b([^>]*)\/>/i.exec(done[1]);
+  if (content) {
+    const attrs = content[1] || content[3] || '';
+    const expr = /\bexpr\s*=\s*(["'])(.*?)\1/i.exec(attrs)?.[2];
+    return expr !== undefined ? { stateId, mode: 'expr', expression: expr } : { stateId, mode: 'content', content: (content[2] || '').trim() };
+  }
+  const params = [...done[1].matchAll(/<param\b([^>]*)\/>/gi)].map(match => ({
+    name: /\bname\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2] || '',
+    expr: /\bexpr\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2],
+    location: /\blocation\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2]
+  }));
+  return params.length ? { stateId, mode: 'params', params } : { stateId, mode: 'none' };
+}
+
+export function updateDoneData(text: string, update: DoneDataUpdate): string {
+  const state = findState(text, update.stateId);
+  if (!state || state.kind !== 'final') { throw new Error(`Final state ${update.stateId} was not found.`); }
+  const mode = update.mode || 'none';
+  let inner = '';
+  if (mode === 'expr') {
+    const expression = String(update.expression ?? '').trim();
+    if (!expression) { throw new Error('Done-data expression is required.'); }
+    inner = `<content expr="${escapeXml(expression)}"/>`;
+  } else if (mode === 'content') {
+    const content = String(update.content ?? '').trim();
+    if (!content) { throw new Error('Done-data inline content is required.'); }
+    inner = `<content>${content}</content>`;
+  } else if (mode === 'params') {
+    const params = update.params ?? [];
+    if (!params.length) { throw new Error('At least one done-data parameter is required.'); }
+    inner = params.map(param => {
+      const name = String(param.name ?? '').trim(), expr = String(param.expr ?? '').trim(), location = String(param.location ?? '').trim();
+      if (!name) { throw new Error('Each done-data parameter requires a name.'); }
+      if ((expr ? 1 : 0) + (location ? 1 : 0) !== 1) { throw new Error(`Done-data parameter ${name} requires exactly one of expr or location.`); }
+      return `<param name="${escapeXml(name)}" ${expr ? `expr="${escapeXml(expr)}"` : `location="${escapeXml(location)}"`}/>`;
+    }).join('\n');
+  }
+  const close = '</final>';
+  const bodyStart = state.openEnd, bodyEnd = state.end > state.openEnd ? state.end - close.length : state.openEnd;
+  const body = text.slice(bodyStart, bodyEnd);
+  const existing = /\s*<donedata\b[^>]*>[\s\S]*?<\/donedata\s*>/i.exec(body);
+  let result = text;
+  if (existing) {
+    const start = bodyStart + existing.index;
+    result = text.slice(0, start) + text.slice(start + existing[0].length);
+  }
+  if (mode === 'none') { return result; }
+  const refreshed = findState(result, update.stateId)!;
+  const lineStart = result.lastIndexOf('\n', refreshed.start) + 1;
+  const indent = (result.slice(lineStart, refreshed.start).match(/^[ \t]*/)?.[0] ?? '') + '  ';
+  const formatted = `<donedata>\n${indentFragment(inner, indent + '  ')}\n${indent}</donedata>`;
+  if (/\/\s*>$/.test(refreshed.tag)) {
+    const open = refreshed.tag.replace(/\/\s*>$/, '>');
+    const parentIndent = indent.slice(0, -2);
+    return result.slice(0, refreshed.start) + `${open}\n${indent}${formatted}\n${parentIndent}</final>` + result.slice(refreshed.openEnd);
+  }
+  const insert = refreshed.end - close.length;
+  return result.slice(0, insert) + `\n${indent}${formatted}\n${indent.slice(0, -2)}` + result.slice(insert);
 }

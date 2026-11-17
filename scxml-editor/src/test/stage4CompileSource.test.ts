@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Stage 4 compile wiring',()=>{test('defines typed done data before rendering',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.match(s,/const doneData = selectedState\?\.kind === 'final'/);assert.doesNotMatch(s,/\$\{'\$\{'\}doneData/);assert.match(s,/map\(\(p: \{ name: string; expr\?: string; location\?: string \}\)/);});});

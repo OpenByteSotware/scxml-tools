@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Final state editor support',()=>{test('renders a draggable dark-red double circle',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.match(s,/class="node final/);assert.match(s,/class="final-inner"/);assert.match(s,/final-drag-surface/);assert.match(s,/fill:#5a1018/);assert.match(s,/fill:#2b080c/);});});

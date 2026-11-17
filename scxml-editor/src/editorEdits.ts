@@ -85,6 +85,7 @@ export function updateTransition(text: string, update: TransitionUpdate): string
     let tag = setAttribute(match[0], 'event', update.event.trim());
     tag = setAttribute(tag, 'cond', update.cond.trim());
     tag = setAttribute(tag, 'target', update.targets.trim());
+    tag = setAttribute(tag, 'type', update.type === 'internal' || update.type === 'external' ? update.type : '');
     const start = found.openEnd + match.index;
     return text.slice(0, start) + tag + text.slice(start + match[0].length);
   }
@@ -140,6 +141,7 @@ export function createTransition(text: string, transition: NewTransition): strin
   tag = setAttribute(tag, 'event', transition.event.trim());
   tag = setAttribute(tag, 'cond', transition.cond.trim());
   tag = setAttribute(tag, 'target', transition.targets.trim());
+  tag = setAttribute(tag, 'type', transition.type === 'internal' || transition.type === 'external' ? transition.type : '');
   if (/\/\s*>$/.test(found.tag)) {
     const open = found.tag.replace(/\/\s*>$/, '>');
     const replacement = `${open}\n    ${tag}\n  </${found.kind}>`;
@@ -704,4 +706,79 @@ export function updateDoneData(text: string, update: DoneDataUpdate): string {
   }
   const insert = refreshed.end - close.length;
   return result.slice(0, insert) + `\n${indent}${formatted}\n${indent.slice(0, -2)}` + result.slice(insert);
+}
+
+
+export interface DataDeclarationUpdate { id: string; mode: 'expr' | 'src' | 'content'; value: string; }
+export interface DataModelUpdate { scopeId?: string; declarations: DataDeclarationUpdate[]; }
+
+export function readDataModel(text: string, scopeId?: string): DataDeclarationUpdate[] {
+  const region = getDataModelScope(text, scopeId);
+  if (!region) { return []; }
+  const block = /<datamodel\b[^>]*>([\s\S]*?)<\/datamodel\s*>/i.exec(region.body);
+  if (!block) { return []; }
+  return [...block[1].matchAll(/<data\b([^>]*?)(?:\/>|>([\s\S]*?)<\/data\s*>)/gi)].map(match => {
+    const attrs = match[1];
+    const id = readXmlAttribute(attrs, 'id') || '';
+    const expr = readXmlAttribute(attrs, 'expr');
+    const src = readXmlAttribute(attrs, 'src');
+    return expr !== undefined ? { id, mode: 'expr' as const, value: expr }
+      : src !== undefined ? { id, mode: 'src' as const, value: src }
+      : { id, mode: 'content' as const, value: (match[2] || '').trim() };
+  });
+}
+
+export function updateDataModel(text: string, update: DataModelUpdate): string {
+  const declarations = update.declarations ?? [];
+  const seen = new Set<string>();
+  for (const item of declarations) {
+    const id = String(item.id ?? '').trim();
+    const value = String(item.value ?? '').trim();
+    if (!id) { throw new Error('Every data declaration requires an ID.'); }
+    if (seen.has(id)) { throw new Error(`Duplicate data ID in this scope: ${id}.`); }
+    seen.add(id);
+    if (!/^[A-Za-z_][\w.-]*$/.test(id)) { throw new Error(`Data ID ${id} is not a valid XML identifier.`); }
+    if (!value) { throw new Error(`Data declaration ${id} requires an expression, source, or inline content.`); }
+  }
+  const scope = getDataModelScope(text, update.scopeId);
+  if (!scope) { throw new Error(update.scopeId ? `State ${update.scopeId} was not found.` : 'The SCXML root element was not found.'); }
+  const existing = /\s*<datamodel\b[^>]*>[\s\S]*?<\/datamodel\s*>/i.exec(scope.body);
+  let result = text;
+  if (existing) {
+    const start = scope.bodyStart + existing.index;
+    result = text.slice(0, start) + text.slice(start + existing[0].length);
+  }
+  if (!declarations.length) { return result; }
+  const refreshed = getDataModelScope(result, update.scopeId)!;
+  const lineStart = result.lastIndexOf('\n', refreshed.openStart) + 1;
+  const parentIndent = result.slice(lineStart, refreshed.openStart).match(/^[ \t]*/)?.[0] ?? '';
+  const indent = parentIndent + '  ';
+  const items = declarations.map(item => {
+    const id = escapeXml(item.id.trim()); const value = String(item.value).trim();
+    if (item.mode === 'expr') { return `${indent}  <data id="${id}" expr="${escapeXml(value)}"/>`; }
+    if (item.mode === 'src') { return `${indent}  <data id="${id}" src="${escapeXml(value)}"/>`; }
+    return `${indent}  <data id="${id}">${value}</data>`;
+  }).join('\n');
+  const block = `${indent}<datamodel>\n${items}\n${indent}</datamodel>`;
+  if (/\/\s*>$/.test(refreshed.openTag)) {
+    const expanded = refreshed.openTag.replace(/\/\s*>$/, '>');
+    return result.slice(0, refreshed.openStart) + `${expanded}\n${block}\n${parentIndent}</${refreshed.closeName}>` + result.slice(refreshed.openEnd);
+  }
+  return result.slice(0, refreshed.bodyStart) + `\n${block}` + result.slice(refreshed.bodyStart);
+}
+
+function readXmlAttribute(attrs: string, name: string): string | undefined {
+  return new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, 'i').exec(attrs)?.[2];
+}
+
+function getDataModelScope(text: string, scopeId?: string): { openStart: number; openEnd: number; bodyStart: number; bodyEnd: number; body: string; openTag: string; closeName: string } | undefined {
+  if (scopeId) {
+    const state = findState(text, scopeId); if (!state) { return undefined; }
+    const closeName = state.kind;
+    const bodyEnd = state.end > state.openEnd ? state.end - (`</${closeName}>`).length : state.openEnd;
+    return { openStart: state.start, openEnd: state.openEnd, bodyStart: state.openEnd, bodyEnd, body: text.slice(state.openEnd, bodyEnd), openTag: state.tag, closeName };
+  }
+  const root = /<scxml\b[^>]*>/i.exec(text); const closeStart = text.lastIndexOf('</scxml>');
+  if (!root || closeStart < 0) { return undefined; }
+  return { openStart: root.index, openEnd: root.index + root[0].length, bodyStart: root.index + root[0].length, bodyEnd: closeStart, body: text.slice(root.index + root[0].length, closeStart), openTag: root[0], closeName: 'scxml' };
 }

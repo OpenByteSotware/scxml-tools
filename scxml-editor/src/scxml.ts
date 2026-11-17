@@ -3,6 +3,7 @@ import { XMLParser, XMLValidator } from 'fast-xml-parser';
 export type StateKind = 'state' | 'parallel' | 'final' | 'history';
 export interface Transition { event?: string; cond?: string; type?: 'internal' | 'external'; targets: string[]; }
 export interface InitialTransition { target?: string; cond?: string; explicit: boolean; }
+export interface DataDeclaration { id: string; mode: 'expr' | 'src' | 'content'; value: string; }
 export interface DoneData { mode: 'none' | 'expr' | 'content' | 'params'; expression?: string; content?: string; params?: Array<{ name: string; expr?: string; location?: string }>; }
 export interface StateNode {
   id: string;
@@ -13,6 +14,7 @@ export interface StateNode {
   doneData?: DoneData;
   children: StateNode[];
   transitions: Transition[];
+  dataModel?: DataDeclaration[];
 }
 export interface ScxmlModel {
   name?: string;
@@ -23,6 +25,7 @@ export interface ScxmlModel {
   datamodel?: string;
   binding?: string;
   xmlBase?: string;
+  dataModel?: DataDeclaration[];
   states: StateNode[];
   ids: Set<string>;
   errors: string[];
@@ -30,6 +33,14 @@ export interface ScxmlModel {
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', preserveOrder: false, trimValues: false });
 const asArray = <T>(value: T | T[] | undefined): T[] => value === undefined ? [] : Array.isArray(value) ? value : [value];
+const readDataDeclarations = (raw: any): DataDeclaration[] => {
+  const model = asArray<any>(raw?.datamodel)[0];
+  return asArray<any>(model?.data).map(item => item?.['@_expr'] !== undefined
+    ? { id: String(item?.['@_id'] ?? ''), mode: 'expr', value: String(item['@_expr']) }
+    : item?.['@_src'] !== undefined
+      ? { id: String(item?.['@_id'] ?? ''), mode: 'src', value: String(item['@_src']) }
+      : { id: String(item?.['@_id'] ?? ''), mode: 'content', value: String(item?.['#text'] ?? '') });
+};
 
 function readInitial(raw: any): InitialTransition | undefined {
   const initial = asArray<any>(raw?.initial)[0];
@@ -53,6 +64,16 @@ export function parseScxml(text: string): ScxmlModel {
 
   const ids = new Set<string>();
   const duplicates = new Set<string>();
+  const validateData = (items: DataDeclaration[], scope: string): void => {
+    const seen = new Set<string>();
+    items.forEach(item => {
+      if (!item.id) { errors.push(`${scope} contains data without an id.`); }
+      else if (seen.has(item.id)) { errors.push(`${scope} contains duplicate data id ${item.id}.`); }
+      else { seen.add(item.id); }
+      if (!item.value.trim()) { errors.push(`Data ${item.id || '(unnamed)'} requires expr, src, or inline content.`); }
+    });
+  };
+  validateData(readDataDeclarations(root), 'SCXML datamodel');
   const readState = (raw: any, kind: StateKind, fallback: string): StateNode => {
     const id = raw?.['@_id'] || fallback;
     if (ids.has(id)) { duplicates.add(id); } else { ids.add(id); }
@@ -81,7 +102,7 @@ export function parseScxml(text: string): ScxmlModel {
       initialTransition: explicitInitial,
       historyType: kind === 'history' ? (raw?.['@_type'] === 'deep' ? 'deep' : 'shallow') : undefined,
       doneData,
-      children, transitions
+      children, transitions, dataModel: readDataDeclarations(raw)
     };
   };
 
@@ -125,6 +146,7 @@ export function parseScxml(text: string): ScxmlModel {
         if (!region.initial && region.children.length > 0) { errors.push(`Parallel region ${region.id} should define an initial child.`); }
       });
     }
+    validateData(state.dataModel ?? [], `State ${state.id} datamodel`);
     state.children.forEach(child => visit(child, depth + 1));
   };
   states.forEach(state => visit(state));
@@ -168,7 +190,7 @@ export function parseScxml(text: string): ScxmlModel {
   if (binding && binding !== 'early' && binding !== 'late') { errors.push('The scxml binding attribute must be "early" or "late".'); }
 
   return {
-    name: root['@_name'], version, namespace,
+    name: root['@_name'], version, namespace, dataModel: readDataDeclarations(root),
     initial: effectiveRootInitial, initialTransition: rootInitial,
     datamodel: root['@_datamodel'], binding, xmlBase: root['@_xml:base'],
     states, ids, errors

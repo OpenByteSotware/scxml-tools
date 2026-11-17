@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readExecutableContent, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateRootProperties, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readDataModel, readExecutableContent, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateRootProperties, updateDataModel, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -204,5 +204,37 @@ suite('State and history deletion', () => {
     const changed = deleteState(source, 'outer');
     assert.doesNotMatch(changed, /id="outer"|id="inner"|id="memory"/);
     assert.match(changed, /id="other"/);
+  });
+});
+
+suite('Stage 5 SCXML data models', () => {
+  test('creates and reads root data declarations in order', () => {
+    let text = `<scxml><state id="idle"/></scxml>`;
+    text = updateDataModel(text, { declarations: [
+      { id: 'count', mode: 'expr', value: '0' },
+      { id: 'config', mode: 'src', value: 'config.json' },
+      { id: 'payload', mode: 'content', value: '<value>ready</value>' }
+    ] });
+    assert.match(text, /<datamodel>[\s\S]*id="count" expr="0"[\s\S]*id="config" src="config.json"[\s\S]*id="payload">/);
+    assert.deepStrictEqual(readDataModel(text).map(item => item.id), ['count', 'config', 'payload']);
+  });
+  test('creates state-local declarations and removes the block when empty', () => {
+    let text = `<scxml><state id="work"/></scxml>`;
+    text = updateDataModel(text, { scopeId: 'work', declarations: [{ id: 'attempts', mode: 'expr', value: '0' }] });
+    assert.match(text, /<state id="work">[\s\S]*<datamodel>[\s\S]*id="attempts"/);
+    text = updateDataModel(text, { scopeId: 'work', declarations: [] });
+    assert.doesNotMatch(text, /<datamodel>/);
+  });
+  test('rejects duplicate IDs and empty values', () => {
+    const source = `<scxml/>`;
+    assert.throws(() => updateDataModel(source, { declarations: [{ id: 'x', mode: 'expr', value: '1' }, { id: 'x', mode: 'src', value: 'x.json' }] }), /Duplicate data ID/);
+    assert.throws(() => updateDataModel(source, { declarations: [{ id: 'x', mode: 'expr', value: '' }] }), /requires an expression/);
+  });
+  test('writes transition type attributes', () => {
+    let text = `<scxml><state id="a"><transition target="b"/></state><state id="b"/></scxml>`;
+    text = updateTransition(text, { stateId: 'a', index: 0, event: '', cond: '', targets: 'b', type: 'internal' });
+    assert.match(text, /type="internal"/);
+    text = createTransition(text, { stateId: 'a', event: 'go', cond: '', targets: 'b', type: 'external' });
+    assert.match(text, /event="go" target="b" type="external"/);
   });
 });

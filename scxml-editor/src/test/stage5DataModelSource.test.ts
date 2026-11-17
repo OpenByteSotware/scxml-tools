@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Stage 5 data model UI',()=>{test('wires root and state-local data declarations safely',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.match(s,/root-data-model/);assert.match(s,/state-data-model/);assert.match(s,/updateDataModel/);assert.match(s,/parseDataModelRows/);assert.match(s,/split\(\/\\\\r\?\\\\n\//);});});

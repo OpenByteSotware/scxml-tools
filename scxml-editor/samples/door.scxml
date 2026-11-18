@@ -58,6 +58,7 @@
 
 
   <parallel id="ss6">
+    <transition event="final1" target="f1"/>
     <onentry>
       <assign location="test1" expr="test1=test1+1"/>
     </onentry>  
@@ -77,4 +78,6 @@
   
     <state id="par12_sub2"/>
   </parallel>
+
+  <final id="f1"/>
 </scxml>

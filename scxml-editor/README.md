@@ -203,3 +203,6 @@ The Stage 5 parser invoked recursive state validation before the `validateData` 
 
 #### Selection scroll-position preservation
 Selecting a state or transition rebuilds the webview to refresh the properties sidebar. The chart now stores its horizontal and vertical offsets with `acquireVsCodeApi().setState()` before selection and while scrolling, then restores those offsets after the rebuild. State selection resets only the properties sidebar to its top. Transition selection scrolls only the properties sidebar to the selected transition section. Left-click and context-menu selection use the same viewport-preserving path.
+
+#### Bidirectional and parallel transition separation
+Transitions sharing the same state pair now use separate cubic lanes. Reverse directions are placed on opposite sides of the center line, with 36 pixels between adjacent lanes. Additional transitions between the same states receive additional lanes. Labels move with the route, and separation is recalculated while states are dragged.

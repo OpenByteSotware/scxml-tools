@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Bidirectional transition routing',()=>{test('uses separate perpendicular lanes',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.match(s,/pairCounts=new Map/);assert.match(s,/pairLanes=new Map/);assert.match(s,/normalX=-dy\/length/);assert.match(s,/\*36/);assert.match(s,/directionSign=a<b\?1:-1/);});});

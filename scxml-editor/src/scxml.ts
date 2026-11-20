@@ -50,6 +50,55 @@ function readInitial(raw: any): InitialTransition | undefined {
   return { target: transition?.['@_target'], cond: transition?.['@_cond'], explicit: true };
 }
 
+
+function collectStateSemantics(states: StateNode[]) {
+  const byId = new Map<string, StateNode>();
+  const parentById = new Map<string, StateNode | undefined>();
+  const descendantsById = new Map<string, Set<string>>();
+  const walk = (state: StateNode, parent?: StateNode): Set<string> => {
+    byId.set(state.id, state); parentById.set(state.id, parent);
+    const descendants = new Set<string>();
+    state.children.forEach(child => { descendants.add(child.id); walk(child, state).forEach(id => descendants.add(id)); });
+    descendantsById.set(state.id, descendants); return descendants;
+  };
+  states.forEach(state => walk(state));
+  return { byId, parentById, descendantsById };
+}
+function ancestorChain(id: string, parentById: Map<string, StateNode | undefined>): StateNode[] {
+  const result: StateNode[] = []; let current = parentById.get(id);
+  while (current) { result.push(current); current = parentById.get(current.id); }
+  return result;
+}
+function isDescendant(id: string, ancestorId: string, descendantsById: Map<string, Set<string>>): boolean { return descendantsById.get(ancestorId)?.has(id) ?? false; }
+function nearestParallelRegion(id: string, parallelId: string, parentById: Map<string, StateNode | undefined>): string | undefined {
+  let current = parentById.get(id); let childId = id;
+  while (current) { if (current.id === parallelId) { return childId; } childId = current.id; current = parentById.get(current.id); }
+  return undefined;
+}
+function validateTargetSet(source: StateNode, transition: Transition, semantics: ReturnType<typeof collectStateSemantics>, errors: string[]): void {
+  const targets = transition.targets;
+  [...new Set(targets.filter((target, index) => targets.indexOf(target) !== index))].forEach(target => errors.push(`State ${source.id} transition contains duplicate target ${target}.`));
+  if (transition.type === 'internal') {
+    if (source.kind !== 'state' || !source.children.length) { errors.push(`State ${source.id} uses an internal transition but is not a compound state.`); }
+    targets.filter(target => !isDescendant(target, source.id, semantics.descendantsById)).forEach(target => errors.push(`Internal transition from ${source.id} must target a descendant; ${target} is outside its hierarchy.`));
+  }
+  for (let i = 0; i < targets.length; i++) for (let j = i + 1; j < targets.length; j++) {
+    const left = targets[i], right = targets[j]; if (left === right) { continue; }
+    if (isDescendant(left, right, semantics.descendantsById) || isDescendant(right, left, semantics.descendantsById)) { errors.push(`Transition from ${source.id} cannot target both ancestor and descendant states ${left} and ${right}.`); continue; }
+    const rightAncestors = new Set(ancestorChain(right, semantics.parentById).map(item => item.id));
+    const commonParallel = ancestorChain(left, semantics.parentById).find(item => item.kind === 'parallel' && rightAncestors.has(item.id));
+    if (!commonParallel) { errors.push(`Transition from ${source.id} has incompatible multiple targets ${left} and ${right}; targets must occupy different regions of a common parallel state.`); continue; }
+    const leftRegion = nearestParallelRegion(left, commonParallel.id, semantics.parentById), rightRegion = nearestParallelRegion(right, commonParallel.id, semantics.parentById);
+    if (!leftRegion || !rightRegion || leftRegion === rightRegion) { errors.push(`Transition from ${source.id} targets ${left} and ${right} in the same region of parallel state ${commonParallel.id}.`); }
+  }
+}
+function detectUnconditionalEventlessCycles(states: StateNode[], errors: string[]): void {
+  const graph = new Map<string, string[]>(); const add = (state: StateNode): void => { graph.set(state.id, state.transitions.filter(t => !t.event && !t.cond && t.targets.length === 1).map(t => t.targets[0])); state.children.forEach(add); }; states.forEach(add);
+  const visiting = new Set<string>(), visited = new Set<string>();
+  const dfs = (id: string, path: string[]): void => { if (visiting.has(id)) { const start = path.indexOf(id); errors.push(`Unconditional eventless transition cycle: ${[...path.slice(start), id].join(' -> ')}.`); return; } if (visited.has(id)) return; visiting.add(id); path.push(id); (graph.get(id) ?? []).forEach(next => { if (graph.has(next)) dfs(next, path); }); path.pop(); visiting.delete(id); visited.add(id); };
+  graph.forEach((_targets, id) => dfs(id, []));
+}
+
 export function parseScxml(text: string): ScxmlModel {
   const errors: string[] = [];
   const valid = XMLValidator.validate(text);
@@ -111,9 +160,11 @@ export function parseScxml(text: string): ScxmlModel {
     asArray(root[kind]).forEach((state, index) => states.push(readState(state, kind, `${kind}${index + 1}`)));
   }
   duplicates.forEach(id => errors.push(`Duplicate state id: ${id}`));
+  const semantics = collectStateSemantics(states);
 
   const visit = (state: StateNode, depth = 0) => {
     state.transitions.flatMap(t => t.targets).filter(target => !ids.has(target)).forEach(target => errors.push(`State ${state.id} targets missing state ${target}.`));
+    state.transitions.forEach(transition => validateTargetSet(state, transition, semantics, errors));
     state.transitions.filter(t => t.type && t.type !== 'internal' && t.type !== 'external').forEach(() => errors.push(`State ${state.id} has an invalid transition type.`));
     if (depth > 64) { errors.push(`State ${state.id} exceeds the supported nesting depth of 64.`); }
     const initialTargets = String(state.initial ?? '').split(/\s+/).filter(Boolean);
@@ -130,6 +181,13 @@ export function parseScxml(text: string): ScxmlModel {
       if (state.children.length) { errors.push(`History ${state.id} cannot contain child states.`); }
       if (state.transitions.length > 1) { errors.push(`History ${state.id} may contain at most one default transition.`); }
       if (state.transitions[0] && state.transitions[0].targets.length < 1) { errors.push(`History ${state.id} default transition requires a target.`); }
+      const owner = semantics.parentById.get(state.id);
+      if (owner && state.transitions[0]) {
+        state.transitions[0].targets.forEach(target => {
+          const legal = state.historyType === 'deep' ? isDescendant(target, owner.id, semantics.descendantsById) : owner.children.some(child => child.id === target && child.kind !== 'history');
+          if (!legal) { errors.push(`${state.historyType === 'deep' ? 'Deep' : 'Shallow'} history ${state.id} default target ${target} is outside its legal ${owner.id} scope.`); }
+        });
+      }
     }
     if (state.kind === 'final') {
       if (state.children.length) { errors.push(`Final state ${state.id} cannot contain child states.`); }
@@ -150,6 +208,7 @@ export function parseScxml(text: string): ScxmlModel {
     state.children.forEach(child => visit(child, depth + 1));
   };
   states.forEach(state => visit(state));
+  detectUnconditionalEventlessCycles(states, errors);
 
   const rootInitial = readInitial(root);
   const effectiveRootInitial = rootInitial?.target || root['@_initial'];

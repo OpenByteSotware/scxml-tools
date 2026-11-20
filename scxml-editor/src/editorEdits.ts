@@ -1,3 +1,4 @@
+import { parseScxml } from './scxml';
 export interface StateUpdate { oldId: string; id: string; kind: string; initial: boolean; parallel?: boolean; }
 export interface TransitionUpdate { stateId: string; index: number; event: string; cond: string; targets: string; type?: '' | 'internal' | 'external'; }
 export interface DoneDataUpdate { stateId: string; mode: 'none' | 'expr' | 'content' | 'params'; expression?: string; content?: string; params?: Array<{ name: string; expr?: string; location?: string }>; }
@@ -87,13 +88,19 @@ export function updateTransition(text: string, update: TransitionUpdate): string
     tag = setAttribute(tag, 'target', update.targets.trim());
     tag = setAttribute(tag, 'type', update.type === 'internal' || update.type === 'external' ? update.type : '');
     const start = found.openEnd + match.index;
-    return text.slice(0, start) + tag + text.slice(start + match[0].length);
+    const changed = text.slice(0, start) + tag + text.slice(start + match[0].length);
+    assertTransitionSemantics(changed);
+    return changed;
   }
   throw new Error(`Transition ${update.index + 1} was not found in state ${update.stateId}.`);
 }
 
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
+function assertTransitionSemantics(text: string): void {
+  const semanticErrors = parseScxml(text).errors.filter(error => /transition|multiple targets|internal transition|eventless transition cycle|history .*target/i.test(error));
+  if (semanticErrors.length) { throw new Error(semanticErrors[0]); }
+}
 export interface NewState { id: string; kind: string; initial: boolean; }
 export interface NewTransition { stateId: string; event: string; cond: string; targets: string; type?: '' | 'internal' | 'external'; }
 
@@ -145,10 +152,14 @@ export function createTransition(text: string, transition: NewTransition): strin
   if (/\/\s*>$/.test(found.tag)) {
     const open = found.tag.replace(/\/\s*>$/, '>');
     const replacement = `${open}\n    ${tag}\n  </${found.kind}>`;
-    return text.slice(0, found.start) + replacement + text.slice(found.openEnd);
+    const changed = text.slice(0, found.start) + replacement + text.slice(found.openEnd);
+    assertTransitionSemantics(changed);
+    return changed;
   }
   const insertion = `\n    ${tag}`;
-  return text.slice(0, found.openEnd) + insertion + text.slice(found.openEnd);
+  const changed = text.slice(0, found.openEnd) + insertion + text.slice(found.openEnd);
+  assertTransitionSemantics(changed);
+  return changed;
 }
 
 export function deleteTransition(text: string, stateId: string, transitionIndex: number): string {

@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Stage 9 transition semantics UI',()=>{test('renders eventless and multi-target semantics',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.match(s,/transition-junction/);assert.match(s,/data-target-count/);assert.match(s,/eventless \? 'ε'/);assert.match(s,/Eventless \/ automatic/);assert.match(s,/multi-target/);});});

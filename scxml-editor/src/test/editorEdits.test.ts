@@ -305,3 +305,18 @@ suite('Stage 8 initial and history transition actions', () => {
     assert.doesNotMatch(changed, /<raise/);
   });
 });
+
+suite('Stage 9 transition semantics', () => {
+  test('rejects internal transitions that leave the source hierarchy', () => {
+    const source = `<scxml><state id="parent"><state id="child"/></state><state id="outside"/></scxml>`;
+    assert.throws(() => createTransition(source, { stateId: 'parent', event: 'go', cond: '', targets: 'outside', type: 'internal' }), /must target a descendant/);
+  });
+  test('accepts multi-target transitions into separate parallel regions', () => {
+    const source = `<scxml><state id="source"/><parallel id="p"><state id="r1"><state id="a"/></state><state id="r2"><state id="b"/></state></parallel></scxml>`;
+    assert.doesNotThrow(() => createTransition(source, { stateId: 'source', event: 'go', cond: '', targets: 'a b' }));
+  });
+  test('rejects incompatible multi-target siblings', () => {
+    const source = `<scxml><state id="source"/><state id="parent"><state id="a"/><state id="b"/></state></scxml>`;
+    assert.throws(() => createTransition(source, { stateId: 'source', event: 'go', cond: '', targets: 'a b' }), /incompatible multiple targets/);
+  });
+});

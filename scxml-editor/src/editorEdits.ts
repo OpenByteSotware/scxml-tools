@@ -991,3 +991,29 @@ function getInitialTransitionScope(text: string, scopeId?: string): { bodyStart:
   const bodyStart = root.index + root[0].length;
   return { bodyStart, body: text.slice(bodyStart, closeStart) };
 }
+
+
+export interface InlineInvokeContentUpdate { stateId: string; invokeIndex: number; scxml: string; }
+
+export function updateInlineInvokeContent(text: string, update: InlineInvokeContentUpdate): string {
+  const state = findState(text, update.stateId);
+  if (!state) { throw new Error(`State ${update.stateId} was not found.`); }
+  const close = state.end > state.openEnd ? `</${state.kind}>` : '';
+  const bodyEnd = state.end - close.length;
+  const body = text.slice(state.openEnd, bodyEnd);
+  const invokes = findDirectInvokeElements(body);
+  const invoke = invokes[update.invokeIndex];
+  if (!invoke) { throw new Error(`Invoke ${update.invokeIndex + 1} was not found in state ${update.stateId}.`); }
+  const scxml = String(update.scxml ?? '').trim();
+  if (!scxml || !/^<scxml\b[\s\S]*<\/scxml\s*>$/i.test(scxml)) { throw new Error('Inline invoke content must be a complete scxml element.'); }
+  const invokeXml = invoke.xml;
+  const content = /<content\b[^>]*>([\s\S]*?)<\/content\s*>/i.exec(invokeXml);
+  if (!content) { throw new Error('The selected invoke does not contain inline content.'); }
+  const existingScxml = /<scxml\b[\s\S]*<\/scxml\s*>/i.exec(content[1]);
+  if (!existingScxml) { throw new Error('The selected invoke content does not contain inline SCXML.'); }
+  const contentStart = content.index + content[0].indexOf(content[1]);
+  const localStart = contentStart + existingScxml.index;
+  const changedInvoke = invokeXml.slice(0, localStart) + scxml + invokeXml.slice(localStart + existingScxml[0].length);
+  const absoluteStart = state.openEnd + invoke.start;
+  return text.slice(0, absoluteStart) + changedInvoke + text.slice(absoluteStart + invoke.xml.length);
+}

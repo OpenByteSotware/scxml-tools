@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readDataModel, readExecutableContent, readInitialTransitionActions, readInvokeNavigationTargets, readInvokes, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateInitialTransitionActions, updateInvokes, updateRootProperties, updateDataModel, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readDataModel, readExecutableContent, readInitialTransitionActions, readInvokeNavigationTargets, readInvokes, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateInitialTransitionActions, updateInlineInvokeContent, updateInvokes, updateRootProperties, updateDataModel, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -318,5 +318,13 @@ suite('Stage 9 transition semantics', () => {
   test('rejects incompatible multi-target siblings', () => {
     const source = `<scxml><state id="source"/><state id="parent"><state id="a"/><state id="b"/></state></scxml>`;
     assert.throws(() => createTransition(source, { stateId: 'source', event: 'go', cond: '', targets: 'a b' }), /incompatible multiple targets/);
+  });
+});
+
+suite('Stage 12 inline invoke write-back', () => {
+  test('replaces inline invoked SCXML without changing invoke metadata', () => {
+    const source = `<scxml><state id="owner"><invoke id="child" type="scxml"><content><scxml version="1.0"><state id="old"/></scxml></content></invoke></state></scxml>`;
+    const changed = updateInlineInvokeContent(source, { stateId: 'owner', invokeIndex: 0, scxml: `<scxml version="1.0"><final id="done"/></scxml>` });
+    assert.match(changed, /<invoke id="child" type="scxml">/); assert.match(changed, /<final id="done"\/>/); assert.doesNotMatch(changed, /id="old"/);
   });
 });

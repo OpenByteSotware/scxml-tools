@@ -50,6 +50,15 @@ export function updateState(text: string, update: StateUpdate): string {
       const values = String(value).split(/\s+/).map(v => v === update.oldId ? update.id : v);
       return `${name}=${quote}${values.join(' ')}${quote}`;
     });
+    result = result.replace(/\bevent\s*=\s*(["'])(.*?)\1/gi, (whole, quote, value) => {
+      const descriptors = String(value).split(/\s+/).map(item => item === `done.state.${update.oldId}` ? `done.state.${update.id}` : item);
+      return `event=${quote}${descriptors.join(' ')}${quote}`;
+    });
+    result = result.replace(/\b(cond|expr|location|array)\s*=\s*(["'])(.*?)\2/gi, (whole, name, quote, value) => {
+      const pattern = new RegExp(`\\bIn\\(\\s*(['"])${escapeRegExp(update.oldId)}\\1\\s*\\)`, 'g');
+      const changed = String(value).replace(pattern, (_match, innerQuote) => `In(${innerQuote}${update.id}${innerQuote})`);
+      return `${name}=${quote}${changed}${quote}`;
+    });
   }
   result = setInitialInOwningScope(result, update.id, update.initial);
   return result;

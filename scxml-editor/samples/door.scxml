@@ -75,7 +75,7 @@
   
     <state id="ss6_p2"/>
   </parallel>
-  <state id="t6">
+  <state id="t61">
     <onentry>
       <send event="event.name" target="#_internal" delay="1s" id="sendId"/>
     </onentry>

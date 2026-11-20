@@ -328,3 +328,11 @@ suite('Stage 12 inline invoke write-back', () => {
     assert.match(changed, /<invoke id="child" type="scxml">/); assert.match(changed, /<final id="done"\/>/); assert.doesNotMatch(changed, /id="old"/);
   });
 });
+
+suite('Stage 13 semantic state rename', () => {
+  test('renames completion events and In references', () => {
+    const source = `<scxml><state id="old"/><state id="watch"><transition event="done.state.old next" cond="In('old')" target="old"/></state></scxml>`;
+    const changed = updateState(source, { oldId: 'old', id: 'renamed', kind: 'state', initial: false });
+    assert.match(changed, /done\.state\.renamed next/); assert.match(changed, /In\('renamed'\)/); assert.match(changed, /target="renamed"/);
+  });
+});

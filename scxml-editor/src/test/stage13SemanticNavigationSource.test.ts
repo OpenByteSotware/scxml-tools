@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Stage 13 semantic navigation',()=>{test('provides reference navigation',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.match(s,/incomingTransitions/);assert.match(s,/outgoingTargets/);assert.match(s,/class="go-state"/);assert.match(s,/class="go-transition"/);assert.match(s,/message\.command === 'goToState'/);assert.match(s,/layout\[newId\] = layout\[oldId\]/);});});

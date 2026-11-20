@@ -60,6 +60,10 @@
       <assign location="cycleCount" expr="0"/>
       <log label="555" expr="'starting astable oscillator'"/>
     </transition>
+  
+    <onexit>
+      <send event="event.name" target="#_internal" delay="1s" id="sendId"/>
+    </onexit>
   </state>
 
   <state id="running" initial="charging">

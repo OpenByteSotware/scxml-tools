@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="DoorController" initial="closed">
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="DoorController">
+  <initial>
+    <transition target="closed"/>
+  </initial>
   <state id="closed">
         <onentry>
       <log label="label" expr="expression"/>

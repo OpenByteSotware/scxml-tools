@@ -105,4 +105,17 @@
     </state>
   </state>
 
+
+  <parallel id="p1">
+    <state id="p_s1"/>
+  
+    <state id="p_s2"/>
+  
+    <invoke id="service" type="scxml" src="childsub.scxml" autoforward="false">
+      <param name="input" expr="payload"/>
+      <finalize>
+        <assign location="result" expr="_event.data"/>
+      </finalize>
+    </invoke>
+  </parallel>
 </scxml>

@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0"
+       name="NE555AstableTimer"
+       initial="stopped"
+       datamodel="ecmascript"
+       binding="early">
+
+  <!--
+    NE555 astable simulation.
+
+    Nominal component values:
+      VCC = 5.0 V
+      R1  = 10 kohm
+      R2  = 10 kohm
+      C   = 100 uF
+
+    Expected timing:
+      THIGH = 0.693 * (R1 + R2) * C = 1.386 s
+      TLOW  = 0.693 * R2 * C        = 0.693 s
+      Period                              2.079 s
+      Frequency                           0.481 Hz
+      Duty cycle                          66.7 percent
+
+    Runtime contract:
+      Send event "start" to begin.
+      Send event "tick" every dt seconds, nominally every 10 ms.
+      Send event "stop" to stop and reset the output.
+
+    The capacitor voltage follows the RC exponential equation. Eventless
+    transitions model the 2/3 VCC threshold comparator and 1/3 VCC trigger
+    comparator of a 555 timer.
+  -->
+
+  <datamodel>
+    <data id="vcc" expr="5.0"/>
+    <data id="r1" expr="10000.0"/>
+    <data id="r2" expr="10000.0"/>
+    <data id="capacitance" expr="0.0001"/>
+    <data id="dt" expr="0.01"/>
+    <data id="capacitorVoltage" expr="0.0"/>
+    <data id="outputHigh" expr="false"/>
+    <data id="elapsedSeconds" expr="0.0"/>
+    <data id="cycleCount" expr="0"/>
+    <data id="highThreshold" expr="(2.0 * vcc) / 3.0"/>
+    <data id="lowThreshold" expr="vcc / 3.0"/>
+    <data id="chargeTimeConstant" expr="(r1 + r2) * capacitance"/>
+    <data id="dischargeTimeConstant" expr="r2 * capacitance"/>
+  </datamodel>
+
+  <state id="stopped">
+    <onentry>
+      <assign location="outputHigh" expr="false"/>
+      <log label="555" expr="'stopped'"/>
+    </onentry>
+
+    <transition event="start" target="running">
+      <assign location="capacitorVoltage" expr="0.0"/>
+      <assign location="elapsedSeconds" expr="0.0"/>
+      <assign location="cycleCount" expr="0"/>
+      <log label="555" expr="'starting astable oscillator'"/>
+    </transition>
+  </state>
+
+  <state id="running" initial="charging">
+    <transition event="stop" target="stopped"/>
+
+    <state id="charging">
+      <onentry>
+        <assign location="outputHigh" expr="true"/>
+        <log label="output" expr="'HIGH: capacitor charging through R1 + R2'"/>
+      </onentry>
+
+      <!-- Targetless transition: update the analog model without leaving charging. -->
+      <transition event="tick">
+        <assign location="capacitorVoltage"
+                expr="vcc - ((vcc - capacitorVoltage) * Math.exp(-dt / chargeTimeConstant))"/>
+        <assign location="elapsedSeconds" expr="elapsedSeconds + dt"/>
+      </transition>
+
+      <!-- Threshold comparator trips at 2/3 VCC. -->
+      <transition cond="capacitorVoltage &gt;= highThreshold" target="discharging">
+        <log label="threshold" expr="'2/3 VCC reached at ' + elapsedSeconds + ' seconds'"/>
+      </transition>
+    </state>
+
+    <state id="discharging">
+      <onentry>
+        <assign location="outputHigh" expr="false"/>
+        <log label="output" expr="'LOW: capacitor discharging through R2'"/>
+      </onentry>
+
+      <!-- Targetless transition: update the analog model without leaving discharging. -->
+      <transition event="tick">
+        <assign location="capacitorVoltage"
+                expr="capacitorVoltage * Math.exp(-dt / dischargeTimeConstant)"/>
+        <assign location="elapsedSeconds" expr="elapsedSeconds + dt"/>
+      </transition>
+
+      <!-- Trigger comparator trips at 1/3 VCC. -->
+      <transition cond="capacitorVoltage &lt;= lowThreshold" target="charging">
+        <assign location="cycleCount" expr="cycleCount + 1"/>
+        <log label="trigger" expr="'1/3 VCC reached; completed cycles = ' + cycleCount"/>
+      </transition>
+    </state>
+  </state>
+
+
+  <parallel id="p1">
+    <state id="p_s1"/>
+  
+    <state id="p_s2"/>
+  </parallel>
+</scxml>

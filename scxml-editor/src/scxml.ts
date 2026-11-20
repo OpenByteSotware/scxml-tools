@@ -121,6 +121,75 @@ export function validateScxmlSource(text:string):ScxmlProblem[]{
  return out;
 }
 
+
+function validateEventDescriptors(states: StateNode[], errors: string[]): void {
+  const stateIds = new Set<string>(); const invokeIds = new Set<string>();
+  const walk = (state: StateNode): void => { stateIds.add(state.id); state.children.forEach(walk); };
+  states.forEach(walk);
+  // Invoke IDs are collected from source XML separately in parseScxml; this helper validates syntax and done.state.
+  const visit = (state: StateNode): void => {
+    state.transitions.forEach(transition => {
+      String(transition.event ?? '').split(/\s+/).filter(Boolean).forEach(descriptor => {
+        if (!/^[A-Za-z_][\w.-]*(?:\.\*)?$/.test(descriptor) && descriptor !== '*') {
+          errors.push(`Transition in state ${state.id} has invalid event descriptor ${descriptor}.`);
+        }
+        if (descriptor.startsWith('done.state.')) {
+          const id = descriptor.slice('done.state.'.length);
+          if (!stateIds.has(id)) { errors.push(`Transition in state ${state.id} references missing completion state ${id}.`); }
+        }
+      });
+    });
+    state.children.forEach(visit);
+  };
+  states.forEach(visit);
+}
+
+function validateInvokeCompletionEvents(text: string, states: StateNode[], errors: string[]): void {
+  const invokeIds = new Set([...text.matchAll(/<invoke\b[^>]*\bid\s*=\s*(["'])(.*?)\1/gi)].map(match => match[2]));
+  const visit = (state: StateNode): void => {
+    state.transitions.forEach(transition => String(transition.event ?? '').split(/\s+/).filter(Boolean).forEach(descriptor => {
+      if (descriptor.startsWith('done.invoke.')) {
+        const id = descriptor.slice('done.invoke.'.length);
+        if (!invokeIds.has(id)) { errors.push(`Transition in state ${state.id} references missing invoke completion ${id}.`); }
+      }
+    }));
+    state.children.forEach(visit);
+  };
+  states.forEach(visit);
+}
+
+function validateReachability(states: StateNode[], rootInitial: string | undefined, errors: string[]): void {
+  const all = new Map<string, StateNode>();
+  const parent = new Map<string, StateNode | undefined>();
+  const add = (state: StateNode, owner?: StateNode): void => { all.set(state.id, state); parent.set(state.id, owner); state.children.forEach(child => add(child, state)); };
+  states.forEach(state => add(state));
+  const reachable = new Set<string>(); const queue: string[] = [];
+  const enter = (id: string): void => {
+    if (reachable.has(id) || !all.has(id)) return;
+    reachable.add(id); queue.push(id);
+    const state = all.get(id)!;
+    if (state.kind === 'parallel') state.children.filter(child => child.kind !== 'history').forEach(child => enter(child.id));
+    else if (state.initial) String(state.initial).split(/\s+/).filter(Boolean).forEach(enter);
+  };
+  if (rootInitial) enter(rootInitial); else states[0] && enter(states[0].id);
+  while (queue.length) {
+    const id = queue.shift()!; const state = all.get(id)!;
+    state.transitions.flatMap(item => item.targets).forEach(enter);
+  }
+  all.forEach((state, id) => { if (state.kind !== 'history' && !reachable.has(id)) errors.push(`State ${id} is unreachable from the initial configuration.`); });
+  all.forEach(state => {
+    if ((state.kind === 'state' || state.kind === 'parallel') && state.children.length && !state.initial && state.kind !== 'parallel') {
+      errors.push(`Compound state ${state.id} has no initial child.`);
+    }
+    if (state.kind === 'parallel') {
+      state.children.filter(region => region.kind === 'state').forEach(region => {
+        const descendants: StateNode[] = []; const collect = (item: StateNode): void => { descendants.push(item); item.children.forEach(collect); }; collect(region);
+        if (!descendants.some(item => item.kind === 'final')) errors.push(`Parallel region ${region.id} has no final state and cannot complete normally.`);
+      });
+    }
+  });
+}
+
 export function parseScxml(text: string): ScxmlModel {
   const sourceProblems = validateScxmlSource(text);
   const errors: string[] = sourceProblems.map(item => item.message);
@@ -239,6 +308,9 @@ export function parseScxml(text: string): ScxmlModel {
   if (rootInitialTargets.length > 1) { errors.push('The SCXML state chart must define at most one initial state.'); }
   rootInitialTargets.filter(target => !states.some(state => state.id === target)).forEach(target => errors.push(`Initial state ${target} must be a direct child of scxml.`));
   if (rootInitial && !rootInitial.target) { errors.push('The SCXML explicit initial transition requires a target.'); }
+  validateEventDescriptors(states, errors);
+  validateInvokeCompletionEvents(text, states, errors);
+  validateReachability(states, effectiveRootInitial, errors);
 
   for (const match of text.matchAll(/<transition\b([^>]*)>/gi)) {
     const type = /\btype\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2];
@@ -296,7 +368,7 @@ export function parseScxml(text: string): ScxmlModel {
   const semanticProblems = errors.filter(message => !rangedMessages.has(message)).map(message => {
     const token = /(?:state|target|id|History|Data)\s+([A-Za-z_][\w.-]*)/i.exec(message)?.[1];
     const range: [number,number] = token ? findTextRange(text, token) : [0, Math.max(1, Math.min(text.length, 8))];
-    const severity: ScxmlProblemSeverity = /should contain|should define|cycle/i.test(message) ? 'warning' : 'error';
+    const severity: ScxmlProblemSeverity = /should contain|should define|cycle|unreachable|has no initial child|cannot complete normally/i.test(message) ? 'warning' : 'error';
     return problem(message, range[0], range[1], 'semantic.validation', severity);
   });
   return {

@@ -238,3 +238,23 @@ suite('Stage 5 SCXML data models', () => {
     assert.match(text, /event="go" target="b" type="external"/);
   });
 });
+
+suite('Stage 6 send and cancel executable content', () => {
+  test('accepts send and cancel actions in ordered executable content', () => {
+    const xml = `<send event="timeout" delay="5s" id="timeoutSend"/><cancel sendid="timeoutSend"/>`;
+    const changed = updateExecutableContent(`<scxml><state id="waiting"/></scxml>`, { stateId: 'waiting', location: 'onentry', xml });
+    assert.match(changed, /<send event="timeout" delay="5s" id="timeoutSend"\/>/);
+    assert.match(changed, /<cancel sendid="timeoutSend"\/>/);
+  });
+  test('supports send params or content', () => {
+    assert.doesNotThrow(() => updateExecutableContent(`<scxml><state id="a"/></scxml>`, { stateId: 'a', location: 'onentry', xml: `<send event="submit"><param name="value" expr="payload"/></send>` }));
+    assert.doesNotThrow(() => updateExecutableContent(`<scxml><state id="a"/></scxml>`, { stateId: 'a', location: 'onentry', xml: `<send eventexpr="nextEvent"><content expr="payload"/></send>` }));
+  });
+  test('rejects invalid send and cancel combinations', () => {
+    const base = `<scxml><state id="a"/></scxml>`;
+    assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<send event="x" eventexpr="y"/>` }), /both event and eventexpr/);
+    assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<cancel sendid="a" sendidexpr="b"/>` }), /both sendid and sendidexpr/);
+    assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<send target="#_internal"/>` }), /requires event or eventexpr/);
+    assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<cancel/>` }), /requires sendid or sendidexpr/);
+  });
+});

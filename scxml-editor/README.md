@@ -206,3 +206,11 @@ Selecting a state or transition rebuilds the webview to refresh the properties s
 
 #### Bidirectional and parallel transition separation
 Transitions sharing the same state pair now use separate cubic lanes. Reverse directions are placed on opposite sides of the center line, with 36 pixels between adjacent lanes. Additional transitions between the same states receive additional lanes. Labels move with the route, and separation is recalculated while states are dragged.
+
+### Stage 6: send and cancel event communication
+
+Executable-content editors now support SCXML `<send>` and `<cancel>` actions in on-entry, on-exit, and transition action lists. **+ send** inserts an internal delayed-event starter with `event`, `target`, `delay`, and `id`; **+ cancel** inserts a matching `sendid` cancellation starter. Validation supports literal/expression attribute pairs, requires an event form for send and a send-ID form for cancel, validates `<param name>` with exactly one of `expr` or `location`, and prevents combining `<content>` with `<param>` inside one send.
+
+#### Stage 6 generated action-factory syntax correction
+
+The Stage 6 shortcut factory omitted the closing quote after the generated `</if>` snippet when the new `foreach`, `send`, and `cancel` ternary branches were added. The extension-side TypeScript compiled because the defect was inside generated webview JavaScript, but the browser stopped parsing the webview script, displayed JavaScript punctuation above the chart, and never installed drag or selection handlers. The `if` string is now closed before the `foreach` branch, and a regression test checks all Stage 6 branch boundaries.

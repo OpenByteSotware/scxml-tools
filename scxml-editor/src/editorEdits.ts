@@ -458,7 +458,7 @@ export interface ExecutableContentUpdate {
   xml: string;
 }
 
-const executableElementNames = new Set(['raise', 'log', 'assign', 'script', 'if', 'elseif', 'else', 'foreach']);
+const executableElementNames = new Set(['raise', 'log', 'assign', 'script', 'if', 'elseif', 'else', 'foreach', 'send', 'cancel', 'param', 'content']);
 
 export function readExecutableContent(text: string, stateId: string, location: ExecutableContentLocation, transitionIndex = 0): string {
   const state = findState(text, stateId);
@@ -492,7 +492,7 @@ function validateExecutableFragment(xml: string): void {
   for (const tag of tags) {
     const name = tag[1].includes(':') ? tag[1] : tag[1].toLowerCase();
     if (!tag[0].startsWith('</') && !executableElementNames.has(name) && !name.includes(':')) {
-      throw new Error(`Executable content supports raise, log, assign, script, if, elseif, else, foreach, and namespaced extension actions; found ${tag[1]}.`);
+      throw new Error(`Executable content supports raise, log, assign, script, if, elseif, else, foreach, send, cancel, param, content, and namespaced extension actions; found ${tag[1]}.`);
     }
   }
   const stack: string[] = [];
@@ -531,9 +531,49 @@ function validateExecutableFragment(xml: string): void {
     if (!/\bitem\s*=/.test(match[1])) { throw new Error('foreach requires an item attribute.'); }
     if (/\/\s*>$/.test(match[0])) { throw new Error('foreach must contain executable content and use a closing foreach element.'); }
   }
+  for (const match of withoutComments.matchAll(/<send\b([^>]*)>/gi)) {
+    const attrs = match[1];
+    validateExclusiveAttributePair(attrs, 'event', 'eventexpr', 'send');
+    validateExclusiveAttributePair(attrs, 'target', 'targetexpr', 'send');
+    validateExclusiveAttributePair(attrs, 'type', 'typeexpr', 'send');
+    validateExclusiveAttributePair(attrs, 'id', 'idlocation', 'send');
+    validateExclusiveAttributePair(attrs, 'delay', 'delayexpr', 'send');
+    if (!/\bevent(?:expr)?\s*=/.test(attrs)) { throw new Error('send requires event or eventexpr.'); }
+  }
+  for (const match of withoutComments.matchAll(/<cancel\b([^>]*)\/?\s*>/gi)) {
+    const attrs = match[1];
+    validateExclusiveAttributePair(attrs, 'sendid', 'sendidexpr', 'cancel');
+    if (!/\bsendid(?:expr)?\s*=/.test(attrs)) { throw new Error('cancel requires sendid or sendidexpr.'); }
+    if (!/\/\s*>$/.test(match[0])) { throw new Error('cancel must be empty and self-closing.'); }
+  }
+  for (const match of withoutComments.matchAll(/<param\b([^>]*)\/?\s*>/gi)) {
+    const attrs = match[1];
+    if (!/\bname\s*=/.test(attrs)) { throw new Error('param requires a name attribute.'); }
+    validateExclusiveAttributePair(attrs, 'expr', 'location', 'param');
+    if (!/\b(?:expr|location)\s*=/.test(attrs)) { throw new Error('param requires expr or location.'); }
+    if (!/\/\s*>$/.test(match[0])) { throw new Error('param must be empty and self-closing.'); }
+  }
+  validateSendChildren(withoutComments);
   validateConditionalPlacement(withoutComments);
 }
 
+
+
+function validateExclusiveAttributePair(attrs: string, literal: string, expression: string, element: string): void {
+  if (new RegExp(`\\b${literal}\\s*=`).test(attrs) && new RegExp(`\\b${expression}\\s*=`).test(attrs)) {
+    throw new Error(`${element} cannot define both ${literal} and ${expression}.`);
+  }
+}
+
+function validateSendChildren(xml: string): void {
+  for (const match of xml.matchAll(/<send\b[^>]*>([\s\S]*?)<\/send\s*>/gi)) {
+    const body = match[1];
+    const contentCount = (body.match(/<content\b/gi) || []).length;
+    const paramCount = (body.match(/<param\b/gi) || []).length;
+    if (contentCount > 1) { throw new Error('send may contain at most one content element.'); }
+    if (contentCount && paramCount) { throw new Error('send cannot contain both content and param elements.'); }
+  }
+}
 
 function validateConditionalPlacement(xml: string): void {
   const tokenPattern = /<\/?([A-Za-z_][\w:.-]*)\b[^>]*>/g;

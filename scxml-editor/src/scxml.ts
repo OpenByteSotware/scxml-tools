@@ -181,6 +181,16 @@ export function parseScxml(text: string): ScxmlModel {
     if (!/\barray\s*=/.test(match[1])) { errors.push('foreach requires an array attribute.'); }
     if (!/\bitem\s*=/.test(match[1])) { errors.push('foreach requires an item attribute.'); }
   }
+  for (const match of text.matchAll(/<send\b([^>]*)>/gi)) {
+    const attrs = match[1];
+    const pairs = [['event','eventexpr'], ['target','targetexpr'], ['type','typeexpr'], ['id','idlocation'], ['delay','delayexpr']];
+    pairs.forEach(([literal, expression]) => { if (new RegExp(`\\b${literal}\\s*=`).test(attrs) && new RegExp(`\\b${expression}\\s*=`).test(attrs)) errors.push(`send cannot define both ${literal} and ${expression}.`); });
+    if (!/\bevent(?:expr)?\s*=/.test(attrs)) { errors.push('send requires event or eventexpr.'); }
+  }
+  for (const match of text.matchAll(/<cancel\b([^>]*)\/?\s*>/gi)) {
+    if (!/\bsendid(?:expr)?\s*=/.test(match[1])) { errors.push('cancel requires sendid or sendidexpr.'); }
+    if (/\bsendid\s*=/.test(match[1]) && /\bsendidexpr\s*=/.test(match[1])) { errors.push('cancel cannot define both sendid and sendidexpr.'); }
+  }
 
   const version = root['@_version'];
   const namespace = root['@_xmlns'];

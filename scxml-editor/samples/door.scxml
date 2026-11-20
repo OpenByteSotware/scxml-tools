@@ -54,7 +54,6 @@
   
   </parallel>
 
-  <state id="sss4"/>
 
 
   <parallel id="ss6">
@@ -67,10 +66,17 @@
     <state id="ss6_p2"/>
   </parallel>
   <state id="t6">
+    <onentry>
+      <send event="event.name" target="#_internal" delay="1s" id="sendId"/>
+    </onentry>
     <transition event="t1t" cond="isOk()" target="s3"/>
       <state id="t7"/>
   
     <history id="h1" type="shallow"></history>
+  
+    <onexit>
+      <cancel sendid="sendId"/>
+    </onexit>
   </state>
 
   <parallel id="Par12">

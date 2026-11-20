@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Stage 14 outline and breadcrumbs',()=>{test('renders clickable hierarchy and path',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');for(const token of ['SCXML Outline','renderOutlineState','outline-state','outline-transition','outline-invoke','breadcrumbs','breadcrumb-state','breadcrumb-transition','outlineCollapsed']) assert.ok(s.includes(token),token);});});

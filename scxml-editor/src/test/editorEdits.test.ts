@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readDataModel, readExecutableContent, readInvokes, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateInvokes, updateRootProperties, updateDataModel, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readDataModel, readExecutableContent, readInvokeNavigationTargets, readInvokes, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateInvokes, updateRootProperties, updateDataModel, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -274,5 +274,14 @@ suite('Stage 7 invoke and finalize', () => {
     const base = `<scxml><state id="work"/></scxml>`;
     assert.throws(() => updateInvokes(base, { stateId: 'work', xml: `<invoke src="a" srcexpr="b"/>` }), /both src and srcexpr/);
     assert.throws(() => updateInvokes(base, { stateId: 'work', xml: `<invoke src="a"><content expr="b"/></invoke>` }), /combine src or srcexpr with content/);
+  });
+});
+
+suite('Invoke navigation targets', () => {
+  test('finds external and inline invoked SCXML targets', () => {
+    const source = `<scxml><state id="work"><invoke id="external" src="child.scxml"/><invoke id="inline"><content><scxml version="1.0"><final id="done"/></scxml></content></invoke></state></scxml>`;
+    const targets = readInvokeNavigationTargets(source, 'work');
+    assert.strictEqual(targets[0].src, 'child.scxml');
+    assert.match(targets[1].inlineScxml || '', /<scxml[\s\S]*<\/scxml>/);
   });
 });

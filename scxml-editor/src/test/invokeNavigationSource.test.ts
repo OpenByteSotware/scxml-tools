@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Invoke navigation',()=>{test('opens external and inline SCXML in another custom editor',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.match(s,/message\.command === 'openInvoke'/);assert.match(s,/vscode\.commands\.executeCommand\('vscode\.openWith'/);assert.match(s,/class="open-invoke"/);assert.match(s,/inlineInvokeDocuments/);assert.match(s,/Invoked SCXML file was not found/);});});

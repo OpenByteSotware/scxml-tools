@@ -899,3 +899,30 @@ function findDirectInvokeElements(body: string): Array<{ start: number; end: num
   while ((match = pattern.exec(body))) { results.push({ start: match.index, end: pattern.lastIndex, xml: match[0] }); }
   return results;
 }
+
+
+export interface InvokeNavigationTarget {
+  index: number;
+  id?: string;
+  src?: string;
+  inlineScxml?: string;
+  label: string;
+}
+
+export function readInvokeNavigationTargets(text: string, stateId: string): InvokeNavigationTarget[] {
+  const xml = readInvokes(text, stateId);
+  if (!xml) { return []; }
+  return findDirectInvokeElements(xml).map((item, index) => {
+    const open = /^<invoke\b([^>]*)>/i.exec(item.xml);
+    const attrs = open?.[1] ?? '';
+    const id = readInvokeAttribute(attrs, 'id');
+    const src = readInvokeAttribute(attrs, 'src');
+    const content = /<content\b[^>]*>([\s\S]*?)<\/content\s*>/i.exec(item.xml)?.[1] ?? '';
+    const inlineScxml = /<scxml\b[\s\S]*<\/scxml\s*>/i.exec(content)?.[0];
+    return { index, id, src, inlineScxml, label: id || src || `invoke ${index + 1}` };
+  });
+}
+
+function readInvokeAttribute(attrs: string, name: string): string | undefined {
+  return new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, 'i').exec(attrs)?.[2];
+}

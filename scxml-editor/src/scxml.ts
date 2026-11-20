@@ -1,6 +1,8 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 
 export type StateKind = 'state' | 'parallel' | 'final' | 'history';
+export type ScxmlProblemSeverity = 'error' | 'warning';
+export interface ScxmlProblem { message: string; startOffset: number; endOffset: number; severity: ScxmlProblemSeverity; code: string; }
 export interface Transition { event?: string; cond?: string; type?: 'internal' | 'external'; targets: string[]; }
 export interface InitialTransition { target?: string; cond?: string; explicit: boolean; }
 export interface DataDeclaration { id: string; mode: 'expr' | 'src' | 'content'; value: string; }
@@ -29,6 +31,7 @@ export interface ScxmlModel {
   states: StateNode[];
   ids: Set<string>;
   errors: string[];
+  problems: ScxmlProblem[];
 }
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', preserveOrder: false, trimValues: false });
@@ -99,17 +102,37 @@ function detectUnconditionalEventlessCycles(states: StateNode[], errors: string[
   graph.forEach((_targets, id) => dfs(id, []));
 }
 
+
+const SCXML_NAMESPACE = 'http://www.w3.org/2005/07/scxml';
+const KNOWN = new Set(['scxml','state','parallel','final','history','transition','initial','onentry','onexit','raise','if','elseif','else','foreach','log','datamodel','data','assign','donedata','content','param','script','send','cancel','invoke','finalize']);
+const CHILDREN: Record<string,Set<string>> = {
+ scxml:new Set(['state','parallel','final','initial','datamodel','script']), state:new Set(['onentry','onexit','transition','initial','state','parallel','final','history','datamodel','invoke']), parallel:new Set(['onentry','onexit','transition','state','history','datamodel','invoke']), final:new Set(['onentry','onexit','donedata']), history:new Set(['transition']), initial:new Set(['transition']), datamodel:new Set(['data']), donedata:new Set(['content','param']), send:new Set(['content','param']), invoke:new Set(['content','param','finalize']), finalize:new Set(['raise','if','foreach','log','assign','script','send','cancel']), onentry:new Set(['raise','if','foreach','log','assign','script','send','cancel']), onexit:new Set(['raise','if','foreach','log','assign','script','send','cancel']), transition:new Set(['raise','if','foreach','log','assign','script','send','cancel']), if:new Set(['raise','if','elseif','else','foreach','log','assign','script','send','cancel']), foreach:new Set(['raise','if','foreach','log','assign','script','send','cancel'])
+};
+const ATTRS: Record<string,Set<string>> = { scxml:new Set(['xmlns','version','initial','name','datamodel','binding','xml:base']), state:new Set(['id','initial']),parallel:new Set(['id']),final:new Set(['id']),history:new Set(['id','type']),transition:new Set(['event','cond','target','type']),initial:new Set(['id']),raise:new Set(['event']),if:new Set(['cond']),elseif:new Set(['cond']),foreach:new Set(['array','item','index']),log:new Set(['label','expr']),data:new Set(['id','src','expr']),assign:new Set(['location','expr','type','attr']),content:new Set(['expr']),param:new Set(['name','expr','location']),script:new Set(['src']),send:new Set(['event','eventexpr','target','targetexpr','type','typeexpr','id','idlocation','delay','delayexpr','namelist']),cancel:new Set(['sendid','sendidexpr']),invoke:new Set(['id','idlocation','type','typeexpr','src','srcexpr','autoforward','namelist']) };
+const REQUIRED: Record<string,string[]> = { scxml:['version'],state:['id'],parallel:['id'],final:['id'],history:['id'],raise:['event'],if:['cond'],elseif:['cond'],foreach:['array','item'],data:['id'],assign:['location'],param:['name'] };
+function problem(message:string,startOffset:number,endOffset:number,code:string,severity:ScxmlProblemSeverity='error'):ScxmlProblem{return{message,startOffset:Math.max(0,startOffset),endOffset:Math.max(startOffset+1,endOffset),severity,code};}
+function lineColumnToOffset(text:string,line:number,column:number):number{let o=0;for(let n=1;n<line;n++){const x=text.indexOf('\n',o);if(x<0)return text.length;o=x+1;}return Math.min(text.length,o+Math.max(0,column-1));}
+function findTextRange(text:string,token:string):[number,number]{const i=text.indexOf(token);return i>=0?[i,i+Math.max(1,token.length)]:[0,1];}
+export function validateScxmlSource(text:string):ScxmlProblem[]{
+ const valid=XMLValidator.validate(text);if(valid!==true){const at=lineColumnToOffset(text,valid.err.line,valid.err.col);return[problem(`XML: ${valid.err.msg}`,at,at+1,'xml.syntax')];}
+ const out:ScxmlProblem[]=[];const stack:string[]=[];const counts=new Map<string,number>();const re=/<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<\/?([A-Za-z_][\w:.-]*)\b[^>]*>/g;let m:RegExpExecArray|null;
+ while((m=re.exec(text))){if(!m[1])continue;const q=m[1],local=q.includes(':')?q.slice(q.indexOf(':')+1):q,closing=m[0].startsWith('</'),empty=/\/\s*>$/.test(m[0]);if(closing){stack.pop();continue;}const extension=q.includes(':');if(!extension&&!KNOWN.has(local))out.push(problem(`Unknown SCXML element <${local}>.`,m.index,re.lastIndex,'schema.unknownElement'));if(!extension&&KNOWN.has(local)){const parent=stack[stack.length-1];if(parent&&CHILDREN[parent]&&!CHILDREN[parent].has(local))out.push(problem(`<${local}> is not allowed as a child of <${parent}>.`,m.index,re.lastIndex,'schema.child'));const attrs=[...m[0].matchAll(/\s+([A-Za-z_][\w:.-]*)\s*=\s*(["'])(.*?)\2/g)];const names=new Set(attrs.map(a=>a[1]));for(const a of attrs){const name=a[1];if(!name.startsWith('xmlns')&&!name.includes(':')&&ATTRS[local]&&!ATTRS[local].has(name))out.push(problem(`Attribute ${name} is not allowed on <${local}>.`,m.index+(a.index??0),m.index+(a.index??0)+a[0].length,'schema.attribute'));}for(const req of REQUIRED[local]??[])if(!names.has(req))out.push(problem(`<${local}> requires attribute ${req}.`,m.index,re.lastIndex,'schema.requiredAttribute'));if(local==='scxml'){const ns=attrs.find(a=>a[1]==='xmlns')?.[3];if(ns!==SCXML_NAMESPACE)out.push(problem(`The scxml namespace must be ${SCXML_NAMESPACE}.`,m.index,re.lastIndex,'schema.namespace'));}const key=`${parent??'document'}:${local}`;counts.set(key,(counts.get(key)??0)+1);if(['initial','datamodel','donedata'].includes(local)&&(counts.get(key)??0)>1)out.push(problem(`Only one <${local}> is allowed in this scope.`,m.index,re.lastIndex,'schema.cardinality'));}if(!empty)stack.push(local);
+ }
+ return out;
+}
+
 export function parseScxml(text: string): ScxmlModel {
-  const errors: string[] = [];
+  const sourceProblems = validateScxmlSource(text);
+  const errors: string[] = sourceProblems.map(item => item.message);
   const valid = XMLValidator.validate(text);
   if (valid !== true) {
-    return { states: [], ids: new Set(), errors: [`XML: ${valid.err.msg} at line ${valid.err.line}, column ${valid.err.col}`] };
+    return { states: [], ids: new Set(), errors, problems: sourceProblems };
   }
   let root: any;
   try { root = parser.parse(text)?.scxml; } catch (error) {
-    return { states: [], ids: new Set(), errors: [`Unable to parse SCXML: ${String(error)}`] };
+    const p = problem(`Unable to parse SCXML: ${String(error)}`,0,1,'xml.parse'); return { states: [], ids: new Set(), errors: [p.message], problems: [p] };
   }
-  if (!root) { return { states: [], ids: new Set(), errors: ['The document must contain an <scxml> root element.'] }; }
+  if (!root) { const p = problem('The document must contain an <scxml> root element.',0,Math.max(1,text.length),'schema.root'); return { states: [], ids: new Set(), errors: [p.message], problems: [p] }; }
 
   const ids = new Set<string>();
   const duplicates = new Set<string>();
@@ -269,10 +292,17 @@ export function parseScxml(text: string): ScxmlModel {
   if (namespace !== 'http://www.w3.org/2005/07/scxml') { errors.push('The scxml namespace must be http://www.w3.org/2005/07/scxml.'); }
   if (binding && binding !== 'early' && binding !== 'late') { errors.push('The scxml binding attribute must be "early" or "late".'); }
 
+  const rangedMessages = new Set(sourceProblems.map(item => item.message));
+  const semanticProblems = errors.filter(message => !rangedMessages.has(message)).map(message => {
+    const token = /(?:state|target|id|History|Data)\s+([A-Za-z_][\w.-]*)/i.exec(message)?.[1];
+    const range: [number,number] = token ? findTextRange(text, token) : [0, Math.max(1, Math.min(text.length, 8))];
+    const severity: ScxmlProblemSeverity = /should contain|should define|cycle/i.test(message) ? 'warning' : 'error';
+    return problem(message, range[0], range[1], 'semantic.validation', severity);
+  });
   return {
     name: root['@_name'], version, namespace, dataModel: readDataDeclarations(root),
     initial: effectiveRootInitial, initialTransition: rootInitial,
     datamodel: root['@_datamodel'], binding, xmlBase: root['@_xml:base'],
-    states, ids, errors
+    states, ids, errors, problems: [...sourceProblems, ...semanticProblems]
   };
 }

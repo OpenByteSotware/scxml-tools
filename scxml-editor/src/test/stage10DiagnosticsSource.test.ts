@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Stage 10 diagnostics UI',()=>{test('maps exact ranges and opens XML',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.match(s,/model\.problems\.map/);assert.match(s,/document\.positionAt\(item\.startOffset\)/);assert.match(s,/message\.command === 'revealProblem'/);assert.match(s,/class="problem-link/);assert.doesNotMatch(s,/data-target-count="\$\{transition\.targets\.length\}" data-target-count/);});});

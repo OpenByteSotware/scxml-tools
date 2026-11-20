@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readDataModel, readExecutableContent, readInvokeNavigationTargets, readInvokes, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateInvokes, updateRootProperties, updateDataModel, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readDataModel, readExecutableContent, readInitialTransitionActions, readInvokeNavigationTargets, readInvokes, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateInitialTransitionActions, updateInvokes, updateRootProperties, updateDataModel, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -283,5 +283,25 @@ suite('Invoke navigation targets', () => {
     const targets = readInvokeNavigationTargets(source, 'work');
     assert.strictEqual(targets[0].src, 'child.scxml');
     assert.match(targets[1].inlineScxml || '', /<scxml[\s\S]*<\/scxml>/);
+  });
+});
+
+suite('Stage 8 initial and history transition actions', () => {
+  test('adds actions to an explicit root initial transition', () => {
+    const source = `<scxml><initial><transition target="idle"/></initial><state id="idle"/></scxml>`;
+    const changed = updateInitialTransitionActions(source, { xml: `<log label="initial" expr="'root'"/>` });
+    assert.match(changed, /<initial>[\s\S]*<transition target="idle">[\s\S]*<log[\s\S]*<\/transition>[\s\S]*<\/initial>/);
+    assert.match(readInitialTransitionActions(changed), /<log/);
+  });
+  test('adds actions to a compound-state initial transition', () => {
+    const source = `<scxml><state id="parent"><initial><transition target="child"/></initial><state id="child"/></state></scxml>`;
+    const changed = updateInitialTransitionActions(source, { scopeId: 'parent', xml: `<assign location="count" expr="0"/>` });
+    assert.match(readInitialTransitionActions(changed, 'parent'), /<assign location="count"/);
+  });
+  test('clears initial transition actions without removing target', () => {
+    const source = `<scxml><initial><transition target="idle"><raise event="ready"/></transition></initial><state id="idle"/></scxml>`;
+    const changed = updateInitialTransitionActions(source, { xml: '' });
+    assert.match(changed, /<transition target="idle"\/>/);
+    assert.doesNotMatch(changed, /<raise/);
   });
 });

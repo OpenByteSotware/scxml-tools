@@ -926,3 +926,57 @@ export function readInvokeNavigationTargets(text: string, stateId: string): Invo
 function readInvokeAttribute(attrs: string, name: string): string | undefined {
   return new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, 'i').exec(attrs)?.[2];
 }
+
+
+export interface InitialTransitionActionsUpdate {
+  scopeId?: string;
+  xml: string;
+}
+
+export function readInitialTransitionActions(text: string, scopeId?: string): string {
+  const region = getInitialTransitionScope(text, scopeId);
+  if (!region) { return ''; }
+  const initial = /<initial\b[^>]*>([\s\S]*?)<\/initial\s*>/i.exec(region.body);
+  if (!initial) { return ''; }
+  const transition = /<transition\b[^>]*>([\s\S]*?)<\/transition\s*>/i.exec(initial[1]);
+  return transition ? transition[1].trim() : '';
+}
+
+export function updateInitialTransitionActions(text: string, update: InitialTransitionActionsUpdate): string {
+  const xml = String(update.xml ?? '').trim();
+  validateExecutableFragment(xml);
+  const region = getInitialTransitionScope(text, update.scopeId);
+  if (!region) { throw new Error(update.scopeId ? `State ${update.scopeId} was not found.` : 'The SCXML root element was not found.'); }
+  const initial = /<initial\b[^>]*>([\s\S]*?)<\/initial\s*>/i.exec(region.body);
+  if (!initial) { throw new Error('Create an explicit initial transition before editing its executable actions.'); }
+  const transition = /<transition\b[^>]*?(?:\/>|>[\s\S]*?<\/transition\s*>)/i.exec(initial[1]);
+  if (!transition) { throw new Error('The explicit initial transition was not found.'); }
+  const absoluteStart = region.bodyStart + initial.index + initial[0].indexOf(initial[1]) + transition.index;
+  const original = transition[0];
+  const openTag = /^<transition\b[^>]*>/i.exec(original)?.[0];
+  if (!openTag) { throw new Error('The explicit initial transition opening element was not found.'); }
+  if (!xml) {
+    const emptyTag = openTag.replace(/\/\s*>$/, '>').replace(/>$/, '/>');
+    return text.slice(0, absoluteStart) + emptyTag + text.slice(absoluteStart + original.length);
+  }
+  const lineStart = text.lastIndexOf('\n', absoluteStart) + 1;
+  const indent = text.slice(lineStart, absoluteStart).match(/^[ \t]*/)?.[0] ?? '';
+  const normalizedOpen = openTag.replace(/\/\s*>$/, '>');
+  const replacement = `${normalizedOpen}\n${indentFragment(xml, indent + '  ')}\n${indent}</transition>`;
+  return text.slice(0, absoluteStart) + replacement + text.slice(absoluteStart + original.length);
+}
+
+function getInitialTransitionScope(text: string, scopeId?: string): { bodyStart: number; body: string } | undefined {
+  if (scopeId) {
+    const state = findState(text, scopeId);
+    if (!state) { return undefined; }
+    const closeLength = state.end > state.openEnd ? (`</${state.kind}>`).length : 0;
+    const bodyEnd = state.end - closeLength;
+    return { bodyStart: state.openEnd, body: text.slice(state.openEnd, bodyEnd) };
+  }
+  const root = /<scxml\b[^>]*>/i.exec(text);
+  const closeStart = text.lastIndexOf('</scxml>');
+  if (!root || closeStart < 0) { return undefined; }
+  const bodyStart = root.index + root[0].length;
+  return { bodyStart, body: text.slice(bodyStart, closeStart) };
+}

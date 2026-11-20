@@ -162,6 +162,12 @@ export function parseScxml(text: string): ScxmlModel {
     const type = /\btype\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2];
     if (type && type !== 'internal' && type !== 'external') { errors.push(`Transition type must be internal or external; found ${type}.`); }
   }
+  for (const match of text.matchAll(/<initial\b[^>]*>([\s\S]*?)<\/initial\s*>/gi)) {
+    if (/<transition\b[^>]*\bevent\s*=/.test(match[1])) { errors.push('Initial transitions must be eventless.'); }
+  }
+  for (const match of text.matchAll(/<history\b[^>]*>([\s\S]*?)<\/history\s*>/gi)) {
+    if (/<transition\b[^>]*\bevent\s*=/.test(match[1])) { errors.push('History default transitions must be eventless.'); }
+  }
   for (const match of text.matchAll(/<raise\b([^>]*)\/?\s*>/gi)) {
     if (!/\bevent\s*=/.test(match[1])) { errors.push('raise requires an event attribute.'); }
   }

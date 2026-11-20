@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Invoke visual nodes',()=>{test('renders invoke cards inside owning states',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.match(s,/invokeVisualsByState/);assert.match(s,/invokeCardHeight = 72/);assert.match(s,/class="invoke-node"/);assert.match(s,/>INVOKE</);assert.match(s,/command:'openInvoke'/);});});

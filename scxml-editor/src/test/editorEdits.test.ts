@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readDataModel, readExecutableContent, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateRootProperties, updateDataModel, updateState, updateTransition } from '../editorEdits';
+import { createChildState, createHistoryState, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readDataModel, readExecutableContent, readInvokes, reparentState, updateExecutableContent, updateExplicitInitial, updateHistoryState, updateInvokes, updateRootProperties, updateDataModel, updateState, updateTransition } from '../editorEdits';
 
 suite('SCXML property edits', () => {
   const source = `<scxml initial="a"><state id="a"><transition event="go" target="b"/></state><state id="b"/></scxml>`;
@@ -256,5 +256,23 @@ suite('Stage 6 send and cancel executable content', () => {
     assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<cancel sendid="a" sendidexpr="b"/>` }), /both sendid and sendidexpr/);
     assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<send target="#_internal"/>` }), /requires event or eventexpr/);
     assert.throws(() => updateExecutableContent(base, { stateId: 'a', location: 'onentry', xml: `<cancel/>` }), /requires sendid or sendidexpr/);
+  });
+});
+
+suite('Stage 7 invoke and finalize', () => {
+  test('adds and reads invocation XML', () => {
+    const invoke = `<invoke id="child" type="scxml" src="child.scxml"><param name="input" expr="payload"/><finalize><assign location="result" expr="_event.data"/></finalize></invoke>`;
+    const changed = updateInvokes(`<scxml><state id="work"/></scxml>`, { stateId: 'work', xml: invoke });
+    assert.match(changed, /<state id="work">[\s\S]*<invoke id="child"/);
+    assert.strictEqual(readInvokes(changed, 'work').replace(/\s+/g, ''), invoke.replace(/\s+/g, ''));
+  });
+  test('removes invocations when cleared', () => {
+    const source = `<scxml><state id="work"><invoke id="child" src="child.scxml"/></state></scxml>`;
+    assert.doesNotMatch(updateInvokes(source, { stateId: 'work', xml: '' }), /<invoke/);
+  });
+  test('validates mutually exclusive invoke attributes', () => {
+    const base = `<scxml><state id="work"/></scxml>`;
+    assert.throws(() => updateInvokes(base, { stateId: 'work', xml: `<invoke src="a" srcexpr="b"/>` }), /both src and srcexpr/);
+    assert.throws(() => updateInvokes(base, { stateId: 'work', xml: `<invoke src="a"><content expr="b"/></invoke>` }), /combine src or srcexpr with content/);
   });
 });

@@ -191,6 +191,11 @@ export function parseScxml(text: string): ScxmlModel {
     if (!/\bsendid(?:expr)?\s*=/.test(match[1])) { errors.push('cancel requires sendid or sendidexpr.'); }
     if (/\bsendid\s*=/.test(match[1]) && /\bsendidexpr\s*=/.test(match[1])) { errors.push('cancel cannot define both sendid and sendidexpr.'); }
   }
+  for (const match of text.matchAll(/<invoke\b([^>]*)>/gi)) {
+    const attrs = match[1];
+    const pairs = [['id','idlocation'], ['type','typeexpr'], ['src','srcexpr']];
+    pairs.forEach(([literal, expression]) => { if (new RegExp(`\\b${literal}\\s*=`).test(attrs) && new RegExp(`\\b${expression}\\s*=`).test(attrs)) errors.push(`invoke cannot define both ${literal} and ${expression}.`); });
+  }
 
   const version = root['@_version'];
   const namespace = root['@_xmlns'];

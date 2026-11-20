@@ -822,3 +822,80 @@ function getDataModelScope(text: string, scopeId?: string): { openStart: number;
   if (!root || closeStart < 0) { return undefined; }
   return { openStart: root.index, openEnd: root.index + root[0].length, bodyStart: root.index + root[0].length, bodyEnd: closeStart, body: text.slice(root.index + root[0].length, closeStart), openTag: root[0], closeName: 'scxml' };
 }
+
+
+export interface InvokeUpdate { stateId: string; xml: string; }
+
+export function readInvokes(text: string, stateId: string): string {
+  const state = findState(text, stateId);
+  if (!state || state.kind === 'history' || state.kind === 'final') { return ''; }
+  const close = state.end > state.openEnd ? `</${state.kind}>` : '';
+  const bodyEnd = state.end - close.length;
+  const body = text.slice(state.openEnd, bodyEnd);
+  return findDirectInvokeElements(body).map(item => item.xml.trim()).join('\n');
+}
+
+export function updateInvokes(text: string, update: InvokeUpdate): string {
+  const state = findState(text, update.stateId);
+  if (!state) { throw new Error(`State ${update.stateId} was not found.`); }
+  if (state.kind === 'history' || state.kind === 'final') { throw new Error(`${state.kind} states cannot contain invoke elements.`); }
+  const xml = String(update.xml ?? '').trim();
+  validateInvokeFragment(xml);
+  const close = state.end > state.openEnd ? `</${state.kind}>` : '';
+  const bodyStart = state.openEnd, bodyEnd = state.end - close.length;
+  const body = text.slice(bodyStart, bodyEnd);
+  const invokes = findDirectInvokeElements(body);
+  let result = text;
+  for (const invoke of [...invokes].reverse()) {
+    result = result.slice(0, bodyStart + invoke.start) + result.slice(bodyStart + invoke.end);
+  }
+  if (!xml) { return result; }
+  const refreshed = findState(result, update.stateId)!;
+  const lineStart = result.lastIndexOf('\n', refreshed.start) + 1;
+  const parentIndent = result.slice(lineStart, refreshed.start).match(/^[ \t]*/)?.[0] ?? '';
+  const formatted = indentFragment(xml, parentIndent + '  ');
+  if (/\/\s*>$/.test(refreshed.tag)) {
+    const open = refreshed.tag.replace(/\/\s*>$/, '>');
+    return result.slice(0, refreshed.start) + `${open}\n${formatted}\n${parentIndent}</${refreshed.kind}>` + result.slice(refreshed.openEnd);
+  }
+  const insertion = refreshed.end - (`</${refreshed.kind}>`).length;
+  return result.slice(0, insertion) + `\n${formatted}\n${parentIndent}` + result.slice(insertion);
+}
+
+function validateInvokeFragment(xml: string): void {
+  if (!xml) { return; }
+  const items = findDirectInvokeElements(xml);
+  if (!items.length || items.map(item => item.xml).join('').replace(/\s+/g, '') !== xml.replace(/\s+/g, '')) {
+    throw new Error('Invocation content must contain only one or more invoke elements.');
+  }
+  for (const item of items) {
+    const open = /^<invoke\b([^>]*)>/i.exec(item.xml);
+    if (!open) { throw new Error('Invalid invoke element.'); }
+    const attrs = open[1];
+    validateExclusiveAttributePair(attrs, 'id', 'idlocation', 'invoke');
+    validateExclusiveAttributePair(attrs, 'type', 'typeexpr', 'invoke');
+    validateExclusiveAttributePair(attrs, 'src', 'srcexpr', 'invoke');
+    const body = item.xml.slice(open[0].length, item.xml.toLowerCase().lastIndexOf('</invoke>'));
+    const contentCount = (body.match(/<content\b/gi) || []).length;
+    const finalizeCount = (body.match(/<finalize\b/gi) || []).length;
+    if (contentCount > 1) { throw new Error('invoke may contain at most one content element.'); }
+    if (finalizeCount > 1) { throw new Error('invoke may contain at most one finalize element.'); }
+    if (contentCount && /\bsrc(?:expr)?\s*=/.test(attrs)) { throw new Error('invoke cannot combine src or srcexpr with content.'); }
+    for (const param of body.matchAll(/<param\b([^>]*)\/?\s*>/gi)) {
+      if (!/\bname\s*=/.test(param[1])) { throw new Error('invoke param requires name.'); }
+      validateExclusiveAttributePair(param[1], 'expr', 'location', 'invoke param');
+      if (!/\b(?:expr|location)\s*=/.test(param[1])) { throw new Error('invoke param requires expr or location.'); }
+    }
+    for (const finalize of body.matchAll(/<finalize\b[^>]*>([\s\S]*?)<\/finalize\s*>/gi)) {
+      validateExecutableFragment(finalize[1]);
+    }
+  }
+}
+
+function findDirectInvokeElements(body: string): Array<{ start: number; end: number; xml: string }> {
+  const results: Array<{ start: number; end: number; xml: string }> = [];
+  const pattern = /<invoke\b[^>]*\/>|<invoke\b[^>]*>[\s\S]*?<\/invoke\s*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(body))) { results.push({ start: match.index, end: pattern.lastIndex, xml: match[0] }); }
+  return results;
+}

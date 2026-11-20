@@ -214,3 +214,7 @@ Executable-content editors now support SCXML `<send>` and `<cancel>` actions in 
 #### Stage 6 generated action-factory syntax correction
 
 The Stage 6 shortcut factory omitted the closing quote after the generated `</if>` snippet when the new `foreach`, `send`, and `cancel` ternary branches were added. The extension-side TypeScript compiled because the defect was inside generated webview JavaScript, but the browser stopped parsing the webview script, displayed JavaScript punctuation above the chart, and never installed drag or selection handlers. The `if` string is now closed before the `foreach` branch, and a regression test checks all Stage 6 branch boundaries.
+
+### Stage 7: invoke and finalize
+
+Ordinary and parallel states now expose an **Invocations** XML editor for one or more ordered `<invoke>` elements. The **+ invoke** shortcut inserts an SCXML child-service starter with `id`, `type`, `src`, `autoforward`, one `<param>`, and a `<finalize>` action block. Validation enforces the mutually exclusive pairs `id/idlocation`, `type/typeexpr`, and `src/srcexpr`; prevents combining `src` or `srcexpr` with `<content>`; permits at most one `<content>` and one `<finalize>` per invocation; validates invocation parameters; and applies the existing executable-content validation to `<finalize>`. Clearing the editor removes invocations while preserving unrelated state content.

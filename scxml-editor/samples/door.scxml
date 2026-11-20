@@ -52,6 +52,13 @@
   
     <state id="ss45"/>
   
+  
+    <invoke id="service" type="scxml" src="child.scxml" autoforward="false">
+      <param name="input" expr="payload"/>
+      <finalize>
+        <assign location="result" expr="_event.data"/>
+      </finalize>
+    </invoke>
   </parallel>
 
 

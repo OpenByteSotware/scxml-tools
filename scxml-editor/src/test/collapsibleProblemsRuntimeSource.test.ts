@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Collapsible Problems runtime',()=>{test('declares generated-script variables exactly once',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');assert.strictEqual((s.match(/const problemsPanel=document\.getElementById\('problems-panel'\)/g)||[]).length,1);assert.strictEqual((s.match(/const saveProblemsState=/g)||[]).length,1);});});

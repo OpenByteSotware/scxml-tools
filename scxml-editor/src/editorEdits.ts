@@ -19,29 +19,33 @@ function findState(text: string, id: string): { start: number; openEnd: number; 
   return { start: source.start, openEnd: source.openEnd, end: source.end, tag: text.slice(source.start, source.openEnd), kind: source.localName, source };
 }
 export function updateState(text: string, update: StateUpdate): string {
-  const found = findState(text, update.oldId); if (!found) { throw new Error(`State ${update.oldId} was not found.`); }
-  let openTag = setAttribute(found.tag, 'id', update.id.trim());
-  const requestedKind = update.parallel === true
-    ? 'parallel'
-    : update.parallel === false && found.kind === 'parallel'
-      ? 'state'
-      : update.kind;
-  if (requestedKind && requestedKind !== found.kind) {
-    openTag = openTag.replace(new RegExp(`^<${found.kind}\\b`, 'i'), `<${requestedKind}`);
-  }
-  let result = text.slice(0, found.start) + openTag + text.slice(found.openEnd);
-  if (requestedKind && requestedKind !== found.kind && found.end > found.openEnd) {
-    const delta = openTag.length - found.tag.length;
-    const closeStart = result.lastIndexOf(`</${found.kind}>`, found.end + delta);
-    if (closeStart >= 0) {
-      result = result.slice(0, closeStart) + `</${requestedKind}>` + result.slice(closeStart + found.kind.length + 3);
-    }
+  let source = findElementById(parseXmlSource(text), new Set(['state', 'parallel', 'final', 'history']), update.oldId);
+  if (!source) { throw new Error(`State ${update.oldId} was not found.`); }
+  const requestedKind = update.parallel === true ? 'parallel' : update.parallel === false && source.localName === 'parallel' ? 'state' : update.kind;
+  if (!/^(state|parallel|final|history)$/.test(requestedKind)) { throw new Error(`Unsupported state kind ${requestedKind}.`); }
+  let result = setSourceAttribute(text, source, 'id', update.id.trim());
+  source = findElementById(parseXmlSource(result), new Set(['state', 'parallel', 'final', 'history']), update.id.trim())!;
+  if (requestedKind !== source.localName) {
+    result = replaceElementName(result, source, requestedKind);
   }
   if (update.oldId !== update.id) { result = renameStateReferences(result, update.oldId, update.id); }
-  result = setInitialInOwningScope(result, update.id, update.initial);
-  return result;
+  return setInitialInOwningScope(result, update.id, update.initial);
 }
 
+function replaceElementName(text: string, element: XmlSourceElement, localName: string): string {
+  const prefix = element.name.includes(':') ? element.name.slice(0, element.name.indexOf(':') + 1) : '';
+  const qualified = prefix + localName;
+  const openingNameStart = text.indexOf(element.name, element.start + 1);
+  if (openingNameStart < 0 || openingNameStart >= element.openEnd) { throw new Error(`Unable to locate opening name for ${element.name}.`); }
+  let result = replaceRange(text, openingNameStart, openingNameStart + element.name.length, qualified);
+  if (!element.selfClosing) {
+    const delta = qualified.length - element.name.length;
+    const closingNameStart = element.closeStart + delta + result.slice(element.closeStart + delta, element.end + delta).indexOf(element.name);
+    if (closingNameStart < element.closeStart + delta) { throw new Error(`Unable to locate closing name for ${element.name}.`); }
+    result = replaceRange(result, closingNameStart, closingNameStart + element.name.length, qualified);
+  }
+  return result;
+}
 function renameStateReferences(text: string, oldId: string, newId: string): string {
   let result = text, changed = true;
   while (changed) {
@@ -72,14 +76,12 @@ function setInitialInOwningScope(text: string, stateId: string, initial: boolean
   if (!state) { throw new Error(`State ${stateId} was not found after updating it.`); }
   const parent = findImmediateParent(text, state);
   if (parent) {
-    const parentState = findState(text, parent.id);
+    const parentState = findElementById(parseXmlSource(text), new Set(['state', 'parallel']), parent.id);
     if (!parentState) { throw new Error(`Parent state ${parent.id} was not found.`); }
     // A parallel activates every direct region. Its children do not compete for one initial slot.
-    if (parentState.kind === 'parallel') { return text; }
-    const changed = initial
-      ? setAttribute(parentState.tag, 'initial', stateId)
-      : parentState.tag.replace(new RegExp(`(\\sinitial\\s*=\\s*)(["'])${escapeRegExp(stateId)}\\2`, 'i'), '');
-    return text.slice(0, parentState.start) + changed + text.slice(parentState.openEnd);
+    if (parentState.localName === 'parallel') { return text; }
+    if (initial) { return setSourceAttribute(text, parentState, 'initial', stateId); }
+    return getAttribute(parentState, 'initial')?.value === stateId ? setSourceAttribute(text, parentState, 'initial', '') : text;
   }
   const root = findRootElement(text);
   if (!root) { throw new Error('The SCXML root element was not found.'); }

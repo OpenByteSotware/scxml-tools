@@ -1,4 +1,5 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
+import { getAttribute, parseXmlSource, XmlSourceElement } from './xmlSource';
 
 export type StateKind = 'state' | 'parallel' | 'final' | 'history';
 export type ScxmlProblemSeverity = 'error' | 'warning';
@@ -114,14 +115,27 @@ function problem(message:string,startOffset:number,endOffset:number,code:string,
 function lineColumnToOffset(text:string,line:number,column:number):number{let o=0;for(let n=1;n<line;n++){const x=text.indexOf('\n',o);if(x<0)return text.length;o=x+1;}return Math.min(text.length,o+Math.max(0,column-1));}
 function findTextRange(text:string,token:string):[number,number]{const i=text.indexOf(token);return i>=0?[i,i+Math.max(1,token.length)]:[0,1];}
 export function validateScxmlSource(text:string):ScxmlProblem[]{
+ const source=parseXmlSource(text);
+ if(source.problems.length){return source.problems.map(item=>problem(item.message,item.start,item.end,item.code));}
  const valid=XMLValidator.validate(text);if(valid!==true){const at=lineColumnToOffset(text,valid.err.line,valid.err.col);return[problem(`XML: ${valid.err.msg}`,at,at+1,'xml.syntax')];}
- const out:ScxmlProblem[]=[];const stack:string[]=[];const counts=new Map<string,number>();const re=/<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<\/?([A-Za-z_][\w:.-]*)\b[^>]*>/g;let m:RegExpExecArray|null;
- while((m=re.exec(text))){if(!m[1])continue;const q=m[1],local=q.includes(':')?q.slice(q.indexOf(':')+1):q,closing=m[0].startsWith('</'),empty=/\/\s*>$/.test(m[0]);if(closing){stack.pop();continue;}const extension=q.includes(':');if(!extension&&!KNOWN.has(local))out.push(problem(`Unknown SCXML element <${local}>.`,m.index,re.lastIndex,'schema.unknownElement'));if(!extension&&KNOWN.has(local)){const parent=stack[stack.length-1];if(parent&&CHILDREN[parent]&&!CHILDREN[parent].has(local))out.push(problem(`<${local}> is not allowed as a child of <${parent}>.`,m.index,re.lastIndex,'schema.child'));const attrs=[...m[0].matchAll(/\s+([A-Za-z_][\w:.-]*)\s*=\s*(["'])(.*?)\2/g)];const names=new Set(attrs.map(a=>a[1]));for(const a of attrs){const name=a[1];if(!name.startsWith('xmlns')&&!name.includes(':')&&ATTRS[local]&&!ATTRS[local].has(name))out.push(problem(`Attribute ${name} is not allowed on <${local}>.`,m.index+(a.index??0),m.index+(a.index??0)+a[0].length,'schema.attribute'));}for(const req of REQUIRED[local]??[])if(!names.has(req))out.push(problem(`<${local}> requires attribute ${req}.`,m.index,re.lastIndex,'schema.requiredAttribute'));if(local==='scxml'){const ns=attrs.find(a=>a[1]==='xmlns')?.[3];if(ns!==SCXML_NAMESPACE)out.push(problem(`The scxml namespace must be ${SCXML_NAMESPACE}.`,m.index,re.lastIndex,'schema.namespace'));}const key=`${parent??'document'}:${local}`;counts.set(key,(counts.get(key)??0)+1);if(['initial','datamodel','donedata'].includes(local)&&(counts.get(key)??0)>1)out.push(problem(`Only one <${local}> is allowed in this scope.`,m.index,re.lastIndex,'schema.cardinality'));}if(!empty)stack.push(local);
- }
- return out;
+ const out:ScxmlProblem[]=[];const counts=new Map<string,number>();
+ const visit=(element:XmlSourceElement):void=>{
+  const q=element.name,local=element.localName,extension=q.includes(':');
+  if(!extension&&!KNOWN.has(local)){out.push(problem(`Unknown SCXML element <${local}>.`,element.start,element.openEnd,'schema.unknownElement'));}
+  if(!extension&&KNOWN.has(local)){
+   const parent=element.parent?.localName;
+   if(parent&&CHILDREN[parent]&&!CHILDREN[parent].has(local)){out.push(problem(`<${local}> is not allowed as a child of <${parent}>.`,element.start,element.openEnd,'schema.child'));}
+   const names=new Set(element.attributes.map(attribute=>attribute.name));
+   for(const attribute of element.attributes){const name=attribute.name;if(!name.startsWith('xmlns')&&!name.includes(':')&&ATTRS[local]&&!ATTRS[local].has(name)){out.push(problem(`Attribute ${name} is not allowed on <${local}>.`,attribute.start,attribute.end,'schema.attribute'));}}
+   for(const req of REQUIRED[local]??[]){if(!names.has(req)){out.push(problem(`<${local}> requires attribute ${req}.`,element.start,element.openEnd,'schema.requiredAttribute'));}}
+   if(local==='scxml'){const ns=getAttribute(element,'xmlns')?.value;if(ns!==SCXML_NAMESPACE){out.push(problem(`The scxml namespace must be ${SCXML_NAMESPACE}.`,element.start,element.openEnd,'schema.namespace'));}}
+   const key=`${parent??'document'}:${local}`;counts.set(key,(counts.get(key)??0)+1);
+   if(['initial','datamodel','donedata'].includes(local)&&(counts.get(key)??0)>1){out.push(problem(`Only one <${local}> is allowed in this scope.`,element.start,element.openEnd,'schema.cardinality'));}
+  }
+  element.children.forEach(visit);
+ };
+ source.roots.forEach(visit);return out;
 }
-
-
 function validateEventDescriptors(states: StateNode[], errors: string[]): void {
   const stateIds = new Set<string>(); const invokeIds = new Set<string>();
   const walk = (state: StateNode): void => { stateIds.add(state.id); state.children.forEach(walk); };

@@ -1,5 +1,6 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import { getAttribute, parseXmlSource, XmlSourceElement } from './xmlSource';
+import { validateDataModelExpressions } from './expressionValidation';
 
 export type StateKind = 'state' | 'parallel' | 'final' | 'history';
 export type ScxmlProblemSeverity = 'error' | 'warning';
@@ -258,7 +259,7 @@ export function validateScxmlSource(text:string):ScxmlProblem[]{
  const valid=XMLValidator.validate(text);if(valid!==true){const at=lineColumnToOffset(text,valid.err.line,valid.err.col);return[problem(`XML: ${valid.err.msg}`,at,at+1,'xml.syntax')];}
  const roots=source.roots.filter(item=>item.localName==='scxml');
  if(roots.length!==1)return[problem('The document must contain exactly one scxml root element.',0,Math.max(1,text.length),'schema.root')];
- const out:ScxmlProblem[]=[];validateScxmlTree(text,roots[0],out);return out;
+ const out:ScxmlProblem[]=[];validateScxmlTree(text,roots[0],out);out.push(...validateDataModelExpressions(text).map(item=>problem(item.message,item.start,item.end,item.code,item.severity)));return out;
 }
 function validateEventDescriptors(states: StateNode[], errors: string[]): void {
   const stateIds = new Set<string>(); const invokeIds = new Set<string>();

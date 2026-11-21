@@ -88,7 +88,8 @@
     "test": "vscode-test"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.2.5"
+    "fast-xml-parser": "^5.2.5",
+    "acorn": "^8.15.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -106,35 +106,159 @@ function detectUnconditionalEventlessCycles(states: StateNode[], errors: string[
 
 const SCXML_NAMESPACE = 'http://www.w3.org/2005/07/scxml';
 const KNOWN = new Set(['scxml','state','parallel','final','history','transition','initial','onentry','onexit','raise','if','elseif','else','foreach','log','datamodel','data','assign','donedata','content','param','script','send','cancel','invoke','finalize']);
+const EXECUTABLE = new Set(['raise','if','foreach','log','assign','script','send','cancel']);
 const CHILDREN: Record<string,Set<string>> = {
- scxml:new Set(['state','parallel','final','initial','datamodel','script']), state:new Set(['onentry','onexit','transition','initial','state','parallel','final','history','datamodel','invoke']), parallel:new Set(['onentry','onexit','transition','state','history','datamodel','invoke']), final:new Set(['onentry','onexit','donedata']), history:new Set(['transition']), initial:new Set(['transition']), datamodel:new Set(['data']), donedata:new Set(['content','param']), send:new Set(['content','param']), invoke:new Set(['content','param','finalize']), finalize:new Set(['raise','if','foreach','log','assign','script','send','cancel']), onentry:new Set(['raise','if','foreach','log','assign','script','send','cancel']), onexit:new Set(['raise','if','foreach','log','assign','script','send','cancel']), transition:new Set(['raise','if','foreach','log','assign','script','send','cancel']), if:new Set(['raise','if','elseif','else','foreach','log','assign','script','send','cancel']), foreach:new Set(['raise','if','foreach','log','assign','script','send','cancel'])
+ scxml:new Set(['initial','datamodel','script','state','parallel','final']),
+ state:new Set(['onentry','onexit','transition','initial','state','parallel','final','history','datamodel','invoke']),
+ parallel:new Set(['onentry','onexit','transition','state','parallel','final','history','datamodel','invoke']),
+ final:new Set(['onentry','onexit','donedata']), history:new Set(['transition']), initial:new Set(['transition']),
+ datamodel:new Set(['data']), donedata:new Set(['content','param']), send:new Set(['content','param']),
+ invoke:new Set(['content','param','finalize']), finalize:EXECUTABLE, onentry:EXECUTABLE, onexit:EXECUTABLE,
+ transition:EXECUTABLE, if:new Set([...EXECUTABLE,'elseif','else']), foreach:EXECUTABLE
 };
-const ATTRS: Record<string,Set<string>> = { scxml:new Set(['xmlns','version','initial','name','datamodel','binding','xml:base']), state:new Set(['id','initial']),parallel:new Set(['id']),final:new Set(['id']),history:new Set(['id','type']),transition:new Set(['event','cond','target','type']),initial:new Set(['id']),raise:new Set(['event']),if:new Set(['cond']),elseif:new Set(['cond']),foreach:new Set(['array','item','index']),log:new Set(['label','expr']),data:new Set(['id','src','expr']),assign:new Set(['location','expr','type','attr']),content:new Set(['expr']),param:new Set(['name','expr','location']),script:new Set(['src']),send:new Set(['event','eventexpr','target','targetexpr','type','typeexpr','id','idlocation','delay','delayexpr','namelist']),cancel:new Set(['sendid','sendidexpr']),invoke:new Set(['id','idlocation','type','typeexpr','src','srcexpr','autoforward','namelist']) };
+const ATTRS: Record<string,Set<string>> = {
+ scxml:new Set(['xmlns','version','initial','name','datamodel','binding','xml:base']),
+ state:new Set(['id','initial']), parallel:new Set(['id']), final:new Set(['id']), history:new Set(['id','type']),
+ transition:new Set(['event','cond','target','type']), initial:new Set(['id']), raise:new Set(['event']),
+ if:new Set(['cond']), elseif:new Set(['cond']), else:new Set(), foreach:new Set(['array','item','index']),
+ log:new Set(['label','expr']), datamodel:new Set(), data:new Set(['id','src','expr']),
+ assign:new Set(['location','expr','type','attr']), donedata:new Set(), content:new Set(['expr']),
+ param:new Set(['name','expr','location']), script:new Set(['src']),
+ send:new Set(['event','eventexpr','target','targetexpr','type','typeexpr','id','idlocation','delay','delayexpr','namelist']),
+ cancel:new Set(['sendid','sendidexpr']), invoke:new Set(['id','idlocation','type','typeexpr','src','srcexpr','autoforward','namelist']),
+ finalize:new Set(), onentry:new Set(), onexit:new Set()
+};
 const REQUIRED: Record<string,string[]> = { scxml:['version'],state:['id'],parallel:['id'],final:['id'],history:['id'],raise:['event'],if:['cond'],elseif:['cond'],foreach:['array','item'],data:['id'],assign:['location'],param:['name'] };
 function problem(message:string,startOffset:number,endOffset:number,code:string,severity:ScxmlProblemSeverity='error'):ScxmlProblem{return{message,startOffset:Math.max(0,startOffset),endOffset:Math.max(startOffset+1,endOffset),severity,code};}
 function lineColumnToOffset(text:string,line:number,column:number):number{let o=0;for(let n=1;n<line;n++){const x=text.indexOf('\n',o);if(x<0)return text.length;o=x+1;}return Math.min(text.length,o+Math.max(0,column-1));}
 function findTextRange(text:string,token:string):[number,number]{const i=text.indexOf(token);return i>=0?[i,i+Math.max(1,token.length)]:[0,1];}
+function attributeRange(element: XmlSourceElement, name: string): [number, number] {
+  const attribute = getAttribute(element, name);
+  return attribute ? [attribute.start, attribute.end] : [element.start, element.openEnd];
+}
+function bodyText(text: string, element: XmlSourceElement): string {
+  if (element.selfClosing) return '';
+  let body = text.slice(element.openEnd, element.closeStart);
+  for (const child of [...element.children].reverse()) {
+    body = body.slice(0, child.start - element.openEnd) + body.slice(child.end - element.openEnd);
+  }
+  return body.replace(/<!--[\s\S]*?-->/g, '').trim();
+}
+function namespaceInScope(element: XmlSourceElement, prefix: string): string | undefined {
+  let current: XmlSourceElement | undefined = element;
+  const attributeName = prefix ? `xmlns:${prefix}` : 'xmlns';
+  while (current) { const value = getAttribute(current, attributeName)?.value; if (value !== undefined) return value; current = current.parent; }
+  return prefix === 'xml' ? 'http://www.w3.org/XML/1998/namespace' : undefined;
+}
+function isXmlId(value: string): boolean { return /^[A-Za-z_][\w.-]*$/.test(value); }
+function isUri(value: string): boolean { try { new URL(value, 'file:///scxml/'); return !/\s/.test(value); } catch { return false; } }
+function isDelay(value: string): boolean { return /^(?:\d+(?:\.\d+)?)(?:ms|s)$/.test(value); }
+function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProblem[]): void {
+  const add = (message: string, element: XmlSourceElement, code: string, attribute?: string): void => {
+    const [start, end] = attribute ? attributeRange(element, attribute) : [element.start, element.openEnd]; out.push(problem(message,start,end,code));
+  };
+  const ids = new Map<string, XmlSourceElement>();
+  const order: Record<string,string[][]> = {
+    scxml:[['datamodel'],['script'],['initial'],['state','parallel','final']],
+    state:[['onentry'],['onexit'],['transition'],['initial'],['state','parallel','final','history'],['datamodel'],['invoke']],
+    parallel:[['onentry'],['onexit'],['transition'],['state','parallel','final','history'],['datamodel'],['invoke']],
+    final:[['onentry'],['onexit'],['donedata']], invoke:[['param'],['content'],['finalize']],
+    send:[['param'],['content']], donedata:[['param'],['content']]
+  };
+  const pair = (element: XmlSourceElement, literal: string, expression: string): void => {
+    if (getAttribute(element,literal) && getAttribute(element,expression)) add(`<${element.localName}> cannot define both ${literal} and ${expression}.`,element,'schema.exclusiveAttribute',literal);
+  };
+  const requireOne = (element: XmlSourceElement, names: string[]): void => {
+    const count=names.filter(name=>getAttribute(element,name)).length;
+    if(count!==1)add(`<${element.localName}> requires exactly one of ${names.join(' or ')}.`,element,'schema.attributeChoice');
+  };
+  const validateOrder = (element: XmlSourceElement): void => {
+    const groups=order[element.localName]; if(!groups)return; let highest=-1;
+    for(const child of element.children){if(child.name.includes(':'))continue;const index=groups.findIndex(group=>group.includes(child.localName));if(index<0)continue;if(index<highest)add(`<${child.localName}> is out of order inside <${element.localName}>.`,child,'schema.ordering');else highest=index;}
+  };
+  const visit=(element:XmlSourceElement):void=>{
+    const local=element.localName, qualified=element.name.includes(':');
+    const elementPrefix=qualified?element.name.slice(0,element.name.indexOf(':')):'';
+    if(qualified&&!namespaceInScope(element,elementPrefix))add(`Namespace prefix ${elementPrefix} is not declared.`,element,'schema.namespacePrefix');
+    for(const attribute of element.attributes){if(attribute.name.includes(':')&&!attribute.name.startsWith('xmlns:')){const prefix=attribute.name.slice(0,attribute.name.indexOf(':'));if(!namespaceInScope(element,prefix))out.push(problem(`Namespace prefix ${prefix} is not declared.`,attribute.start,attribute.end,'schema.namespacePrefix'));}}
+    if(!qualified&&!KNOWN.has(local)){add(`Unknown SCXML element <${local}>.`,element,'schema.unknownElement');element.children.forEach(visit);return;}
+    if(!qualified){
+      const parent=element.parent?.localName;if(parent&&CHILDREN[parent]&&!CHILDREN[parent].has(local))add(`<${local}> is not allowed as a child of <${parent}>.`,element,'schema.child');
+      for(const attribute of element.attributes){if(!attribute.name.startsWith('xmlns')&&!attribute.name.includes(':')&&ATTRS[local]&&!ATTRS[local].has(attribute.name))out.push(problem(`Attribute ${attribute.name} is not allowed on <${local}>.`,attribute.start,attribute.end,'schema.attribute'));}
+      for(const required of REQUIRED[local]??[]){if(!getAttribute(element,required))add(`<${local}> requires attribute ${required}.`,element,'schema.requiredAttribute');}
+      validateOrder(element);
+      const id=getAttribute(element,'id')?.value;if(id!==undefined){if(!isXmlId(id))add(`ID ${id} is not a valid XML identifier.`,element,'schema.id','id');else if(ids.has(id))add(`Duplicate ID ${id}.`,element,'schema.duplicateId','id');else ids.set(id,element);}
+      const children=(name:string)=>element.children.filter(child=>!child.name.includes(':')&&child.localName===name);
+      if(['scxml','state'].includes(local)&&getAttribute(element,'initial')&&children('initial').length)add(`<${local}> cannot combine the initial attribute with an <initial> child.`,element,'schema.initialConflict','initial');
+      if(children('initial').length>1)add(`<${local}> may contain at most one <initial>.`,element,'schema.cardinality');
+      if(children('datamodel').length>1)add(`<${local}> may contain at most one <datamodel>.`,element,'schema.cardinality');
+      if(local==='final'&&children('donedata').length>1)add('<final> may contain at most one <donedata>.',element,'schema.cardinality');
+      if(local==='scxml'){
+        if(element.parent)add('<scxml> must be the document root.',element,'schema.root');
+        if(getAttribute(element,'version')?.value!=='1.0')add('The scxml version attribute must be "1.0".',element,'schema.version','version');
+        if(namespaceInScope(element,'')!==SCXML_NAMESPACE)add(`The scxml namespace must be ${SCXML_NAMESPACE}.`,element,'schema.namespace');
+        const binding=getAttribute(element,'binding')?.value;if(binding&&binding!=='early'&&binding!=='late')add('The scxml binding attribute must be early or late.',element,'schema.value','binding');
+        const base=getAttribute(element,'xml:base')?.value;if(base&&!isUri(base))add('xml:base must be a valid URI reference.',element,'schema.uri','xml:base');
+      }
+      if(local==='transition'){
+        const type=getAttribute(element,'type')?.value;if(type&&type!=='internal'&&type!=='external')add('Transition type must be internal or external.',element,'schema.value','type');
+        const target=getAttribute(element,'target')?.value;if(target&&!target.split(/\s+/).every(isXmlId))add('Transition target must be a whitespace-separated list of valid IDs.',element,'schema.idrefs','target');
+        if(element.parent?.localName==='initial'||element.parent?.localName==='history'){if(getAttribute(element,'event'))add(`${element.parent.localName} transitions must be eventless.`,element,'schema.eventless','event');if(!target)add(`${element.parent.localName} transition requires target.`,element,'schema.requiredAttribute');}
+      }
+      if(local==='initial'){if(children('transition').length!==1)add('<initial> requires exactly one transition child.',element,'schema.cardinality');}
+      if(local==='history'){
+        const type=getAttribute(element,'type')?.value;if(type&&type!=='shallow'&&type!=='deep')add('History type must be shallow or deep.',element,'schema.value','type');
+        if(!element.parent||!['state','parallel'].includes(element.parent.localName))add('<history> must be a child of state or parallel.',element,'schema.parent');
+        if(children('transition').length>1)add('<history> may contain at most one transition.',element,'schema.cardinality');
+      }
+      if(local==='final'&&element.children.some(child=>!child.name.includes(':')&&!['onentry','onexit','donedata'].includes(child.localName)))add('<final> contains an illegal child.',element,'schema.child');
+      if(local==='data'){
+        pair(element,'src','expr');const hasBody=bodyText(text,element)!=='';if((getAttribute(element,'src')||getAttribute(element,'expr'))&&hasBody)add('<data> cannot combine src or expr with inline content.',element,'schema.contentConflict');
+        const src=getAttribute(element,'src')?.value;if(src&&!isUri(src))add('data src must be a valid URI reference.',element,'schema.uri','src');
+      }
+      if(local==='content'){if(getAttribute(element,'expr')&&bodyText(text,element))add('<content> cannot combine expr with inline content.',element,'schema.contentConflict','expr');}
+      if(local==='param'){requireOne(element,['expr','location']);if(!element.selfClosing&&bodyText(text,element))add('<param> must be empty.',element,'schema.empty');}
+      if(local==='send'){
+        pair(element,'event','eventexpr');pair(element,'target','targetexpr');pair(element,'type','typeexpr');pair(element,'id','idlocation');pair(element,'delay','delayexpr');requireOne(element,['event','eventexpr']);
+        const delay=getAttribute(element,'delay')?.value;if(delay&&!isDelay(delay))add('send delay must use a non-negative number followed by ms or s.',element,'schema.delay','delay');
+        const namelist=getAttribute(element,'namelist')?.value;if(namelist&&!namelist.split(/\s+/).every(isXmlId))add('send namelist must contain valid identifiers.',element,'schema.namelist','namelist');
+        if(children('content').length>1)add('<send> may contain at most one content.',element,'schema.cardinality');if(children('content').length&&children('param').length)add('<send> cannot combine content with param.',element,'schema.contentConflict');
+      }
+      if(local==='cancel'){pair(element,'sendid','sendidexpr');requireOne(element,['sendid','sendidexpr']);if(!element.selfClosing&&(element.children.length||bodyText(text,element)))add('<cancel> must be empty.',element,'schema.empty');}
+      if(local==='invoke'){
+        pair(element,'id','idlocation');pair(element,'type','typeexpr');pair(element,'src','srcexpr');
+        const auto=getAttribute(element,'autoforward')?.value;if(auto&&auto!=='true'&&auto!=='false')add('invoke autoforward must be true or false.',element,'schema.boolean','autoforward');
+        const src=getAttribute(element,'src')?.value;if(src&&!isUri(src))add('invoke src must be a valid URI reference.',element,'schema.uri','src');
+        const namelist=getAttribute(element,'namelist')?.value;if(namelist&&!namelist.split(/\s+/).every(isXmlId))add('invoke namelist must contain valid identifiers.',element,'schema.namelist','namelist');
+        if(children('content').length>1)add('<invoke> may contain at most one content.',element,'schema.cardinality');if(children('finalize').length>1)add('<invoke> may contain at most one finalize.',element,'schema.cardinality');if(children('content').length&&(getAttribute(element,'src')||getAttribute(element,'srcexpr')))add('<invoke> cannot combine src or srcexpr with content.',element,'schema.contentConflict');
+      }
+      if(local==='donedata'){if(children('content').length>1)add('<donedata> may contain at most one content.',element,'schema.cardinality');if(children('content').length&&children('param').length)add('<donedata> cannot combine content with param.',element,'schema.contentConflict');}
+      if(local==='script'){const src=getAttribute(element,'src')?.value;if(src&&!isUri(src))add('script src must be a valid URI reference.',element,'schema.uri','src');if(src&&bodyText(text,element))add('<script> cannot combine src with inline script content.',element,'schema.contentConflict','src');}
+      if(local==='assign'&&getAttribute(element,'type')&&getAttribute(element,'attr')){ /* both are jointly allowed for XML data models */ }
+      if(local==='raise'){const event=getAttribute(element,'event')?.value;if(event&&(!/^[A-Za-z_][\w.-]*$/.test(event)||event==='*'||event.endsWith('.*')))add('raise event must be one concrete event name.',element,'schema.eventName','event');}
+      if(local==='if'){
+        const branches=element.children.filter(child=>!child.name.includes(':')&&(child.localName==='elseif'||child.localName==='else'));let elseSeen=false;
+        for(const branch of branches){if(elseSeen)add(`<${branch.localName}> cannot appear after <else>.`,branch,'schema.ordering');if(branch.localName==='else')elseSeen=true;}
+      }
+      if((local==='elseif'||local==='else')&&element.parent?.localName!=='if')add(`<${local}> must be a direct child of <if>.`,element,'schema.parent');
+    }
+    element.children.forEach(visit);
+  };
+  visit(root);
+  // Resolve IDREF/IDREFS after all IDs have been collected.
+  const checkRef=(element:XmlSourceElement,name:string,directOwner?:XmlSourceElement):void=>{const attribute=getAttribute(element,name);if(!attribute)return;for(const id of attribute.value.split(/\s+/).filter(Boolean)){if(!ids.has(id))out.push(problem(`${name} references missing ID ${id}.`,attribute.start,attribute.end,'schema.missingReference'));else if(directOwner&&ids.get(id)?.parent!==directOwner)out.push(problem(`${name} target ${id} must be a direct child.`,attribute.start,attribute.end,'schema.referenceScope'));}};
+  for(const element of root.children.length||root.localName==='scxml'?[root,...root.children]:[root]){void element;}
+  const all=[root];for(let index=0;index<all.length;index++)all.push(...all[index].children);
+  for(const element of all){if(element.name.includes(':'))continue;if(element.localName==='scxml'||element.localName==='state')checkRef(element,'initial',element);if(element.localName==='transition')checkRef(element,'target',element.parent?.localName==='initial'?element.parent.parent:undefined);}
+}
+
 export function validateScxmlSource(text:string):ScxmlProblem[]{
  const source=parseXmlSource(text);
- if(source.problems.length){return source.problems.map(item=>problem(item.message,item.start,item.end,item.code));}
+ if(source.problems.length)return source.problems.map(item=>problem(item.message,item.start,item.end,item.code));
  const valid=XMLValidator.validate(text);if(valid!==true){const at=lineColumnToOffset(text,valid.err.line,valid.err.col);return[problem(`XML: ${valid.err.msg}`,at,at+1,'xml.syntax')];}
- const out:ScxmlProblem[]=[];const counts=new Map<string,number>();
- const visit=(element:XmlSourceElement):void=>{
-  const q=element.name,local=element.localName,extension=q.includes(':');
-  if(!extension&&!KNOWN.has(local)){out.push(problem(`Unknown SCXML element <${local}>.`,element.start,element.openEnd,'schema.unknownElement'));}
-  if(!extension&&KNOWN.has(local)){
-   const parent=element.parent?.localName;
-   if(parent&&CHILDREN[parent]&&!CHILDREN[parent].has(local)){out.push(problem(`<${local}> is not allowed as a child of <${parent}>.`,element.start,element.openEnd,'schema.child'));}
-   const names=new Set(element.attributes.map(attribute=>attribute.name));
-   for(const attribute of element.attributes){const name=attribute.name;if(!name.startsWith('xmlns')&&!name.includes(':')&&ATTRS[local]&&!ATTRS[local].has(name)){out.push(problem(`Attribute ${name} is not allowed on <${local}>.`,attribute.start,attribute.end,'schema.attribute'));}}
-   for(const req of REQUIRED[local]??[]){if(!names.has(req)){out.push(problem(`<${local}> requires attribute ${req}.`,element.start,element.openEnd,'schema.requiredAttribute'));}}
-   if(local==='scxml'){const ns=getAttribute(element,'xmlns')?.value;if(ns!==SCXML_NAMESPACE){out.push(problem(`The scxml namespace must be ${SCXML_NAMESPACE}.`,element.start,element.openEnd,'schema.namespace'));}}
-   const key=`${parent??'document'}:${local}`;counts.set(key,(counts.get(key)??0)+1);
-   if(['initial','datamodel','donedata'].includes(local)&&(counts.get(key)??0)>1){out.push(problem(`Only one <${local}> is allowed in this scope.`,element.start,element.openEnd,'schema.cardinality'));}
-  }
-  element.children.forEach(visit);
- };
- source.roots.forEach(visit);return out;
+ const roots=source.roots.filter(item=>item.localName==='scxml');
+ if(roots.length!==1)return[problem('The document must contain exactly one scxml root element.',0,Math.max(1,text.length),'schema.root')];
+ const out:ScxmlProblem[]=[];validateScxmlTree(text,roots[0],out);return out;
 }
 function validateEventDescriptors(states: StateNode[], errors: string[]): void {
   const stateIds = new Set<string>(); const invokeIds = new Set<string>();

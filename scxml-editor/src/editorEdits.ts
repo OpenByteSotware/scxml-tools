@@ -37,22 +37,33 @@ export function updateState(text: string, update: StateUpdate): string {
       result = result.slice(0, closeStart) + `</${requestedKind}>` + result.slice(closeStart + found.kind.length + 3);
     }
   }
-  if (update.oldId !== update.id) {
-    result = result.replace(/\b(initial|target)\s*=\s*(["'])(.*?)\2/gi, (whole, name, quote, value) => {
-      const values = String(value).split(/\s+/).map(v => v === update.oldId ? update.id : v);
-      return `${name}=${quote}${values.join(' ')}${quote}`;
-    });
-    result = result.replace(/\bevent\s*=\s*(["'])(.*?)\1/gi, (whole, quote, value) => {
-      const descriptors = String(value).split(/\s+/).map(item => item === `done.state.${update.oldId}` ? `done.state.${update.id}` : item);
-      return `event=${quote}${descriptors.join(' ')}${quote}`;
-    });
-    result = result.replace(/\b(cond|expr|location|array)\s*=\s*(["'])(.*?)\2/gi, (whole, name, quote, value) => {
-      const pattern = new RegExp(`\\bIn\\(\\s*(['"])${escapeRegExp(update.oldId)}\\1\\s*\\)`, 'g');
-      const changed = String(value).replace(pattern, (_match, innerQuote) => `In(${innerQuote}${update.id}${innerQuote})`);
-      return `${name}=${quote}${changed}${quote}`;
-    });
-  }
+  if (update.oldId !== update.id) { result = renameStateReferences(result, update.oldId, update.id); }
   result = setInitialInOwningScope(result, update.id, update.initial);
+  return result;
+}
+
+function renameStateReferences(text: string, oldId: string, newId: string): string {
+  let result = text, changed = true;
+  while (changed) {
+    changed = false;
+    for (const element of parseXmlSource(result).elements) {
+      for (const name of ['initial', 'target']) {
+        const attribute = getAttribute(element, name); if (!attribute) continue;
+        const value = attribute.value.split(/\s+/).map(item => item === oldId ? newId : item).join(' ');
+        if (value !== attribute.value) { result = setSourceAttribute(result, element, name, value); changed = true; break; }
+      }
+      if (changed) break;
+      const event = getAttribute(element, 'event');
+      if (event) { const value = event.value.split(/\s+/).map(item => item === `done.state.${oldId}` ? `done.state.${newId}` : item).join(' '); if (value !== event.value) { result = setSourceAttribute(result, element, 'event', value); changed = true; break; } }
+      for (const name of ['cond', 'expr', 'location', 'array']) {
+        const attribute = getAttribute(element, name); if (!attribute) continue;
+        const pattern = new RegExp(`\\bIn\\(\\s*(['"])${escapeRegExp(oldId)}\\1\\s*\\)`, 'g');
+        const value = attribute.value.replace(pattern, (_match, quote) => `In(${quote}${newId}${quote})`);
+        if (value !== attribute.value) { result = setSourceAttribute(result, element, name, value); changed = true; break; }
+      }
+      if (changed) break;
+    }
+  }
   return result;
 }
 
@@ -70,32 +81,22 @@ function setInitialInOwningScope(text: string, stateId: string, initial: boolean
       : parentState.tag.replace(new RegExp(`(\\sinitial\\s*=\\s*)(["'])${escapeRegExp(stateId)}\\2`, 'i'), '');
     return text.slice(0, parentState.start) + changed + text.slice(parentState.openEnd);
   }
-  const root = /<scxml\b[^>]*>/i.exec(text);
+  const root = findRootElement(text);
   if (!root) { throw new Error('The SCXML root element was not found.'); }
-  const changed = initial
-    ? setAttribute(root[0], 'initial', stateId)
-    : root[0].replace(new RegExp(`(\\sinitial\\s*=\\s*)(["'])${escapeRegExp(stateId)}\\2`, 'i'), '');
-  return text.slice(0, root.index) + changed + text.slice(root.index + root[0].length);
+  if (initial) { return setSourceAttribute(text, root, 'initial', stateId); }
+  return getAttribute(root, 'initial')?.value === stateId ? setSourceAttribute(text, root, 'initial', '') : text;
 }
 
 export function updateTransition(text: string, update: TransitionUpdate): string {
-  const found = findState(text, update.stateId); if (!found) { throw new Error(`State ${update.stateId} was not found.`); }
-  const region = text.slice(found.openEnd, found.end);
-  const transition = /<transition\b[^>]*>/gi; let match: RegExpExecArray | null; let index = 0;
-  while ((match = transition.exec(region))) {
-    if (index++ !== update.index) { continue; }
-    let tag = setAttribute(match[0], 'event', update.event.trim());
-    tag = setAttribute(tag, 'cond', update.cond.trim());
-    tag = setAttribute(tag, 'target', update.targets.trim());
-    tag = setAttribute(tag, 'type', update.type === 'internal' || update.type === 'external' ? update.type : '');
-    const start = found.openEnd + match.index;
-    const changed = text.slice(0, start) + tag + text.slice(start + match[0].length);
-    assertTransitionSemantics(changed);
-    return changed;
+  let result=text;
+  for(const [name,value] of [['event',update.event.trim()],['cond',update.cond.trim()],['target',update.targets.trim()],['type',update.type==='internal'||update.type==='external'?update.type:'']] as Array<[string,string]>){
+    const state=findElementById(parseXmlSource(result),new Set(['state','parallel','history']),update.stateId);
+    const transition=state?directChildren(state,'transition')[update.index]:undefined;
+    if(!transition)throw new Error(`Transition ${update.index+1} was not found in state ${update.stateId}.`);
+    result=setSourceAttribute(result,transition,name,value);
   }
-  throw new Error(`Transition ${update.index + 1} was not found in state ${update.stateId}.`);
+  assertTransitionSemantics(result);return result;
 }
-
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function assertTransitionSemantics(text: string): void {
@@ -106,79 +107,22 @@ export interface NewState { id: string; kind: string; initial: boolean; }
 export interface NewTransition { stateId: string; event: string; cond: string; targets: string; type?: '' | 'internal' | 'external'; }
 
 export function createState(text: string, state: NewState): string {
-  const id = state.id.trim();
-  if (!id) { throw new Error('State ID is required.'); }
-  if (findState(text, id)) { throw new Error(`State ${id} already exists.`); }
-  const rootOpen = /<scxml\b[^>]*>/i.exec(text);
-  if (!rootOpen) { throw new Error('The SCXML root element was not found.'); }
-  const rootClose = text.lastIndexOf('</scxml>');
-  if (rootClose < 0) { throw new Error('The SCXML closing element was not found.'); }
-  const kind = /^(state|parallel|final|history)$/.test(state.kind) ? state.kind : 'state';
-  const indentMatch = /\n([ \t]*)<(?:state|parallel|final|history)\b/.exec(text);
-  const indent = indentMatch?.[1] ?? '  ';
-  const element = `\n${indent}<${kind} id="${escapeXml(id)}"/>`;
-  let result = text.slice(0, rootClose) + element + '\n' + text.slice(rootClose);
-  if (state.initial) {
-    const updatedRoot = setAttribute(rootOpen[0], 'initial', id);
-    result = result.slice(0, rootOpen.index) + updatedRoot + result.slice(rootOpen.index + rootOpen[0].length);
-  }
-  return result;
+  const id=state.id.trim();if(!id)throw new Error('State ID is required.');if(findState(text,id))throw new Error(`State ${id} already exists.`);
+  const root=findRootElement(text);if(!root)throw new Error('The SCXML root element was not found.');const kind=/^(state|parallel|final|history)$/.test(state.kind)?state.kind:'state';const base=indentationAt(text,root.start),indent=base+'  ';
+  let result=root.selfClosing?replaceRange(text,root.start,root.openEnd,`${text.slice(root.start,root.openEnd).replace(/\/\s*>$/,'>')}\n${indent}<${kind} id="${escapeXml(id)}"/>\n${base}</${root.name}>`):replaceRange(text,root.closeStart,root.closeStart,`\n${indent}<${kind} id="${escapeXml(id)}"/>\n${base}`);
+  if(state.initial)result=setSourceAttribute(result,findRootElement(result)!,'initial',id);return result;
 }
-
-export function deleteState(text: string, id: string): string {
-  const found = findState(text, id);
-  if (!found) { throw new Error(`State ${id} was not found.`); }
-  let start = found.start;
-  while (start > 0 && (text[start - 1] === ' ' || text[start - 1] === '\t')) { start--; }
-  if (start > 0 && text[start - 1] === '\n') { start--; }
-  let result = text.slice(0, start) + text.slice(found.end);
-  result = result.replace(/\s+initial\s*=\s*(["'])(.*?)\1/gi, (whole, quote, value) => value === id ? '' : whole);
-  result = result.replace(/<transition\b[^>]*>/gi, tag => {
-    const target = /\btarget\s*=\s*(["'])(.*?)\1/i.exec(tag);
-    if (!target) { return tag; }
-    const remaining = target[2].split(/\s+/).filter((value: string) => value && value !== id);
-    return setAttribute(tag, 'target', remaining.join(' '));
-  });
-  return result;
+export function deleteState(text:string,id:string):string{
+  const state=findElementById(parseXmlSource(text),new Set(['state','parallel','final','history']),id);if(!state)throw new Error(`State ${id} was not found.`);let result=removeElementWithLeadingIndent(text,state),changed=true;
+  while(changed){changed=false;for(const element of parseXmlSource(result).elements){const initial=getAttribute(element,'initial');if(initial?.value===id){result=setSourceAttribute(result,element,'initial','');changed=true;break;}if(element.localName==='transition'){const target=getAttribute(element,'target');if(target){const value=target.value.split(/\s+/).filter(item=>item&&item!==id).join(' ');if(value!==target.value){result=setSourceAttribute(result,element,'target',value);changed=true;break;}}}}}return result;
 }
-
-export function createTransition(text: string, transition: NewTransition): string {
-  const found = findState(text, transition.stateId);
-  if (!found) { throw new Error(`State ${transition.stateId} was not found.`); }
-  let tag = '<transition/>';
-  tag = setAttribute(tag, 'event', transition.event.trim());
-  tag = setAttribute(tag, 'cond', transition.cond.trim());
-  tag = setAttribute(tag, 'target', transition.targets.trim());
-  tag = setAttribute(tag, 'type', transition.type === 'internal' || transition.type === 'external' ? transition.type : '');
-  if (/\/\s*>$/.test(found.tag)) {
-    const open = found.tag.replace(/\/\s*>$/, '>');
-    const replacement = `${open}\n    ${tag}\n  </${found.kind}>`;
-    const changed = text.slice(0, found.start) + replacement + text.slice(found.openEnd);
-    assertTransitionSemantics(changed);
-    return changed;
-  }
-  const insertion = `\n    ${tag}`;
-  const changed = text.slice(0, found.openEnd) + insertion + text.slice(found.openEnd);
-  assertTransitionSemantics(changed);
-  return changed;
+export function createTransition(text:string,transition:NewTransition):string{
+  const state=findElementById(parseXmlSource(text),new Set(['state','parallel','history']),transition.stateId);if(!state)throw new Error(`State ${transition.stateId} was not found.`);let tag='<transition/>';tag=setAttribute(tag,'event',transition.event.trim());tag=setAttribute(tag,'cond',transition.cond.trim());tag=setAttribute(tag,'target',transition.targets.trim());tag=setAttribute(tag,'type',transition.type==='internal'||transition.type==='external'?transition.type:'');const base=indentationAt(text,state.start),indent=base+'  ';
+  const changed=state.selfClosing?replaceRange(text,state.start,state.openEnd,`${text.slice(state.start,state.openEnd).replace(/\/\s*>$/,'>')}\n${indent}${tag}\n${base}</${state.name}>`):replaceRange(text,state.closeStart,state.closeStart,`\n${indent}${tag}\n${base}`);assertTransitionSemantics(changed);return changed;
 }
-
-export function deleteTransition(text: string, stateId: string, transitionIndex: number): string {
-  const found = findState(text, stateId);
-  if (!found) { throw new Error(`State ${stateId} was not found.`); }
-  const region = text.slice(found.openEnd, found.end);
-  const pattern = /<transition\b[^>]*(?:\/>|>[\s\S]*?<\/transition>)/gi;
-  let match: RegExpExecArray | null; let index = 0;
-  while ((match = pattern.exec(region))) {
-    if (index++ !== transitionIndex) { continue; }
-    let start = found.openEnd + match.index;
-    while (start > found.openEnd && (text[start - 1] === ' ' || text[start - 1] === '\t')) { start--; }
-    if (start > found.openEnd && text[start - 1] === '\n') { start--; }
-    return text.slice(0, start) + text.slice(found.openEnd + match.index + match[0].length);
-  }
-  throw new Error(`Transition ${transitionIndex + 1} was not found in state ${stateId}.`);
+export function deleteTransition(text:string,stateId:string,index:number):string{
+  const state=findElementById(parseXmlSource(text),new Set(['state','parallel','history']),stateId);const transition=state?directChildren(state,'transition')[index]:undefined;if(!transition)throw new Error(`Transition ${index+1} was not found in state ${stateId}.`);return removeElementWithLeadingIndent(text,transition);
 }
-
 function escapeXml(value: string): string { return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
 export interface NewChildState { parentId: string; id: string; kind: string; initial: boolean; }
@@ -261,36 +205,24 @@ export function createHistoryState(text: string, history: NewHistoryState): stri
 }
 
 export function updateHistoryState(text: string, update: HistoryUpdate): string {
-  const found = findState(text, update.id);
-  if (!found || found.kind !== 'history') { throw new Error(`History ${update.id} was not found.`); }
-  let tag = setAttribute(found.tag, 'type', update.historyType === 'deep' ? 'deep' : 'shallow');
-  let result = text.slice(0, found.start) + tag + text.slice(found.openEnd);
-  const refreshed = findState(result, update.id)!;
+  let history = findElementById(parseXmlSource(text), new Set(['history']), update.id);
+  if (!history) throw new Error(`History ${update.id} was not found.`);
+  let result = setSourceAttribute(text, history, 'type', update.historyType === 'deep' ? 'deep' : 'shallow');
+  history = findElementById(parseXmlSource(result), new Set(['history']), update.id)!;
   const target = String(update.defaultTarget ?? '').trim();
-  if (target && !findState(result, target)) { throw new Error(`Default history target ${target} was not found.`); }
-  const body = result.slice(refreshed.openEnd, refreshed.end);
-  const transition = /<transition\b[^>]*\/?\s*>/i.exec(body);
-  if (transition) {
-    const changed = setAttribute(transition[0], 'target', target);
-    const start = refreshed.openEnd + transition.index;
-    return result.slice(0, start) + changed + result.slice(start + transition[0].length);
-  }
-  if (!target) { return result; }
-  const close = '</history>'; const closeStart = refreshed.end - close.length;
-  return result.slice(0, closeStart) + `\n    <transition target="${escapeXml(target)}"/>\n  ` + result.slice(closeStart);
+  if (target && !findState(result, target)) throw new Error(`Default history target ${target} was not found.`);
+  const transition = directChildren(history, 'transition')[0];
+  if (transition) return setSourceAttribute(result, transition, 'target', target);
+  if (!target) return result;
+  const baseIndent = indentationAt(result, history.start), indent = baseIndent + '  ';
+  if (history.selfClosing) { const open=result.slice(history.start,history.openEnd).replace(/\/\s*>$/,'>'); return replaceRange(result,history.start,history.openEnd,`${open}\n${indent}<transition target="${escapeXml(target)}"/>\n${baseIndent}</${history.name}>`); }
+  return replaceRange(result,history.closeStart,history.closeStart,`\n${indent}<transition target="${escapeXml(target)}"/>\n${baseIndent}`);
 }
 export function getStateDepth(text: string, id: string): number {
-  const target = findState(text, id);
-  if (!target) { throw new Error(`State ${id} was not found.`); }
-  const scanner = new RegExp(`<\\/?(?:${stateTags})\\b[^>]*>`, 'gi');
-  let depth = 0; let token: RegExpExecArray | null;
-  while ((token = scanner.exec(text)) && token.index < target.start) {
-    if (/^<\//.test(token[0])) { depth = Math.max(0, depth - 1); }
-    else if (!/\/\s*>$/.test(token[0])) { depth++; }
-  }
-  return depth;
+  const state=findElementById(parseXmlSource(text),new Set(['state','parallel','final','history']),id);
+  if(!state) throw new Error(`State ${id} was not found.`);
+  let depth=0,parent=state.parent; while(parent){if(['state','parallel','final','history'].includes(parent.localName))depth++;parent=parent.parent;} return depth;
 }
-
 export interface ReparentStateRequest { stateId: string; newParentId?: string; }
 
 export function reparentState(text: string, request: ReparentStateRequest): string {

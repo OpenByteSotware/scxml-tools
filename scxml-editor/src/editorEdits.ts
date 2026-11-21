@@ -758,6 +758,9 @@ export interface StructuredSendAction {
   idMode: 'none' | 'literal' | 'location'; id?: string;
   delayMode: 'none' | 'literal' | 'expression'; delay?: string;
   namelist?: string;
+  params?: Array<{ name: string; mode: 'expr' | 'location'; value: string }>;
+  contentMode?: 'none' | 'expression' | 'inline';
+  content?: string;
 }
 
 export function createStructuredSendXml(action: StructuredSendAction): string {
@@ -781,5 +784,29 @@ export function createStructuredSendXml(action: StructuredSendAction): string {
   applyChoice(action.idMode, action.id, 'id', 'idlocation');
   applyChoice(action.delayMode, action.delay, 'delay', 'delayexpr');
   tag = setAttribute(tag, 'namelist', String(action.namelist ?? '').trim().replace(/\s+/g, ' '));
+  const params = action.params ?? [];
+  const contentMode = action.contentMode ?? 'none';
+  const content = String(action.content ?? '').trim();
+  if (params.length && contentMode !== 'none') { throw new Error('Send cannot combine parameters with content.'); }
+  const children: string[] = [];
+  for (const param of params) {
+    const name = String(param.name ?? '').trim(), value = String(param.value ?? '').trim();
+    if (!name || !value) { throw new Error('Each send parameter requires a name and value.'); }
+    if (!/^[A-Za-z_][\w.-]*$/.test(name)) { throw new Error(`Send parameter name ${name} is not a valid identifier.`); }
+    children.push(`<param name="${escapeXml(name)}" ${param.mode === 'location' ? 'location' : 'expr'}="${escapeXml(value)}"/>`);
+  }
+  if (contentMode !== 'none') {
+    if (!content) { throw new Error('Send content is required for the selected content mode.'); }
+    children.push(contentMode === 'expression' ? `<content expr="${escapeXml(content)}"/>` : `<content>${content}</content>`);
+  }
+  return children.length ? `${tag.replace(/\/\s*>$/, '>')}\n  ${children.join('\n  ')}\n</send>` : tag;
+}
+
+export interface StructuredCancelAction { mode: 'literal' | 'expression'; value: string; }
+export function createStructuredCancelXml(action: StructuredCancelAction): string {
+  const value = String(action.value ?? '').trim();
+  if (!value) { throw new Error('Cancel send ID or expression is required.'); }
+  let tag = '<cancel/>';
+  tag = setAttribute(tag, action.mode === 'expression' ? 'sendidexpr' : 'sendid', value);
   return tag;
 }

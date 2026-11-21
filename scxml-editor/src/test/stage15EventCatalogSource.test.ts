@@ -1,0 +1,2 @@
+import * as assert from 'assert'; import * as fs from 'fs'; import * as path from 'path';
+suite('Stage 15 event catalog UI',()=>{test('offers document and generated events in transition editors',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');for(const token of ['transitionEvents','raisedEvents','sentEvents','completionEvents','eventCatalog','event-suggestions','event-catalog-item','done.state.','done.invoke.'])assert.ok(s.includes(token),token);});});

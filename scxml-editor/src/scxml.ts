@@ -190,6 +190,25 @@ function validateReachability(states: StateNode[], rootInitial: string | undefin
   });
 }
 
+
+function validateProducedEventNames(text: string, errors: string[]): void {
+  const validate = (element: string, value: string): void => {
+    const name = value.trim();
+    if (!name) { errors.push(`${element} event must not be empty.`); return; }
+    if (/\s/.test(name)) { errors.push(`${element} event must be one event name, not a whitespace-separated descriptor list: ${name}.`); }
+    if (name === '*' || name.endsWith('.*')) { errors.push(`${element} event must be a concrete event name and cannot use wildcard descriptor syntax: ${name}.`); }
+    if (!/^[A-Za-z_][\w.-]*$/.test(name)) { errors.push(`${element} has invalid event name ${name}.`); }
+  };
+  for (const match of text.matchAll(/<raise\b([^>]*)\/?>/gi)) {
+    const value = /\bevent\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2];
+    if (value !== undefined) validate('raise', value);
+  }
+  for (const match of text.matchAll(/<send\b([^>]*)\/?>/gi)) {
+    const value = /\bevent\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2];
+    if (value !== undefined) validate('send', value);
+  }
+}
+
 export function parseScxml(text: string): ScxmlModel {
   const sourceProblems = validateScxmlSource(text);
   const errors: string[] = sourceProblems.map(item => item.message);
@@ -309,6 +328,7 @@ export function parseScxml(text: string): ScxmlModel {
   rootInitialTargets.filter(target => !states.some(state => state.id === target)).forEach(target => errors.push(`Initial state ${target} must be a direct child of scxml.`));
   if (rootInitial && !rootInitial.target) { errors.push('The SCXML explicit initial transition requires a target.'); }
   validateEventDescriptors(states, errors);
+  validateProducedEventNames(text, errors);
   validateInvokeCompletionEvents(text, states, errors);
   validateReachability(states, effectiveRootInitial, errors);
 

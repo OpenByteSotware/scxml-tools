@@ -1,4 +1,5 @@
 import { parseScxml } from './scxml';
+import { directChildren, findElementById, getAttribute, parseXmlSource, setSourceAttribute, XmlSourceElement } from './xmlSource';
 export interface StateUpdate { oldId: string; id: string; kind: string; initial: boolean; parallel?: boolean; }
 export interface TransitionUpdate { stateId: string; index: number; event: string; cond: string; targets: string; type?: '' | 'internal' | 'external'; }
 export interface DoneDataUpdate { stateId: string; mode: 'none' | 'expr' | 'content' | 'params'; expression?: string; content?: string; params?: Array<{ name: string; expr?: string; location?: string }>; }
@@ -12,20 +13,11 @@ function setAttribute(tag: string, name: string, value: string): string {
   return pattern.test(tag) ? tag.replace(pattern, `$1"${escaped}"`) : tag.replace(/\s*\/?>$/, match => ` ${name}="${escaped}"${match}`);
 }
 
-function findState(text: string, id: string): { start: number; openEnd: number; end: number; tag: string; kind: string } | undefined {
-  const tagPattern = new RegExp(`<(${stateTags})\\b[^>]*\\bid\\s*=\\s*(["'])${escapeRegExp(id)}\\2[^>]*>`, 'gi');
-  const match = tagPattern.exec(text); if (!match) { return undefined; }
-  const start = match.index, openEnd = tagPattern.lastIndex, tag = match[0], kind = match[1];
-  if (/\/\s*>$/.test(tag)) { return { start, openEnd, end: openEnd, tag, kind }; }
-  const scanner = new RegExp(`<\\/?(?:${stateTags})\\b[^>]*>`, 'gi'); scanner.lastIndex = openEnd;
-  let depth = 1; let token: RegExpExecArray | null;
-  while ((token = scanner.exec(text))) {
-    if (/^<\//.test(token[0])) { depth--; } else if (!/\/\s*>$/.test(token[0])) { depth++; }
-    if (depth === 0) { return { start, openEnd, end: scanner.lastIndex, tag, kind }; }
-  }
-  return { start, openEnd, end: openEnd, tag, kind };
+function findState(text: string, id: string): { start: number; openEnd: number; end: number; tag: string; kind: string; source: XmlSourceElement } | undefined {
+  const source = findElementById(parseXmlSource(text), new Set(['state', 'parallel', 'final', 'history']), id);
+  if (!source) { return undefined; }
+  return { start: source.start, openEnd: source.openEnd, end: source.end, tag: text.slice(source.start, source.openEnd), kind: source.localName, source };
 }
-
 export function updateState(text: string, update: StateUpdate): string {
   const found = findState(text, update.oldId); if (!found) { throw new Error(`State ${update.oldId} was not found.`); }
   let openTag = setAttribute(found.tag, 'id', update.id.trim());
@@ -373,19 +365,13 @@ function normalizeIndent(xml: string, indent: string): string {
 }
 
 function findImmediateParent(text: string, source: { start: number; end: number }): { id: string; start: number; end: number } | undefined {
-  const pattern = new RegExp(`<(${stateTags})\\b[^>]*\\bid\\s*=\\s*(["'])(.*?)\\2[^>]*>`, 'gi');
-  let match: RegExpExecArray | null;
-  let best: { id: string; start: number; end: number } | undefined;
-  while ((match = pattern.exec(text)) && match.index < source.start) {
-    const candidate = findState(text, match[3]);
-    if (!candidate || candidate.start === source.start) { continue; }
-    if (candidate.start < source.start && candidate.end >= source.end && (!best || candidate.start > best.start)) {
-      best = { id: match[3], start: candidate.start, end: candidate.end };
-    }
-  }
-  return best;
+  const document = parseXmlSource(text);
+  const element = document.elements.find(item => item.start === source.start && item.end === source.end);
+  let parent = element?.parent;
+  while (parent && !['state', 'parallel', 'final', 'history'].includes(parent.localName)) { parent = parent.parent; }
+  const id = parent ? getAttribute(parent, 'id')?.value : undefined;
+  return parent && id ? { id, start: parent.start, end: parent.end } : undefined;
 }
-
 export interface RootPropertiesUpdate {
   name?: string;
   version: string;
@@ -682,26 +668,13 @@ function indentFragment(xml: string, indent: string): string {
 }
 
 function findDirectChildElement(body: string, name: string, requestedIndex: number): { start: number; end: number; inner: string } | undefined {
-  const token = /<\/?(?:state|parallel|final|history|initial|transition|onentry|onexit)\b[^>]*>/gi;
-  let depth = 0; let index = 0; let match: RegExpExecArray | null;
-  while ((match = token.exec(body))) {
-    const closing = /^<\//.test(match[0]); const selfClosing = /\/\s*>$/.test(match[0]);
-    const elementName = /^<\/?([\w:-]+)/.exec(match[0])?.[1]?.toLowerCase();
-    if (closing) { depth = Math.max(0, depth - 1); continue; }
-    if (depth === 0 && elementName === name) {
-      if (index++ !== requestedIndex) { if (!selfClosing) { depth++; } continue; }
-      if (selfClosing) { return { start: match.index, end: token.lastIndex, inner: '' }; }
-      const closePattern = new RegExp(`</${name}\\s*>`, 'ig'); closePattern.lastIndex = token.lastIndex;
-      const close = closePattern.exec(body);
-      if (!close) { return undefined; }
-      return { start: match.index, end: closePattern.lastIndex, inner: body.slice(token.lastIndex, close.index) };
-    }
-    if (!selfClosing) { depth++; }
-  }
-  return undefined;
+  const document = parseXmlSource(`<scope>${body}</scope>`);
+  const scope = document.roots[0];
+  const element = scope ? directChildren(scope, name)[requestedIndex] : undefined;
+  if (!element) { return undefined; }
+  const offset = '<scope>'.length;
+  return { start: element.start - offset, end: element.end - offset, inner: document.text.slice(element.openEnd, element.closeStart) };
 }
-
-
 export function readDoneData(text: string, stateId: string): DoneDataUpdate {
   const state = findState(text, stateId);
   if (!state || state.kind !== 'final') { return { stateId, mode: 'none' }; }
@@ -913,14 +886,11 @@ function validateInvokeFragment(xml: string): void {
 }
 
 function findDirectInvokeElements(body: string): Array<{ start: number; end: number; xml: string }> {
-  const results: Array<{ start: number; end: number; xml: string }> = [];
-  const pattern = /<invoke\b[^>]*\/>|<invoke\b[^>]*>[\s\S]*?<\/invoke\s*>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(body))) { results.push({ start: match.index, end: pattern.lastIndex, xml: match[0] }); }
-  return results;
+  const document = parseXmlSource(`<scope>${body}</scope>`);
+  const scope = document.roots[0];
+  const offset = '<scope>'.length;
+  return scope ? directChildren(scope, 'invoke').map(element => ({ start: element.start - offset, end: element.end - offset, xml: document.text.slice(element.start, element.end) })) : [];
 }
-
-
 export interface InvokeNavigationTarget {
   index: number;
   id?: string;

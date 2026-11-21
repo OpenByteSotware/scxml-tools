@@ -336,3 +336,21 @@ suite('Stage 13 semantic state rename', () => {
     assert.match(changed, /done\.state\.renamed next/); assert.match(changed, /In\('renamed'\)/); assert.match(changed, /target="renamed"/);
   });
 });
+
+suite('Stage 17 source-preserving mutations', () => {
+  test('updates the real state without matching comment, CDATA, script, or extension content', () => {
+    const source = `<scxml><!-- <state id="target"/> --><state id="target" vendor:keep="yes"><onentry><script><![CDATA[var text = "</state>";]]></script><vendor:trace value="keep"/></onentry><state id="child"/></state></scxml>`;
+    const changed = updateState(source, { oldId: 'target', id: 'renamed', kind: 'state', initial: false });
+    assert.match(changed, /<!-- <state id="target"\/> -->/);
+    assert.match(changed, /id="renamed" vendor:keep="yes"/);
+    assert.match(changed, /<vendor:trace value="keep"\/>/);
+    assert.match(changed, /CDATA\[var text = "<\/state>";/);
+  });
+  test('edits only direct transition and invoke children', () => {
+    const source = `<scxml><state id="a"><onentry><send event="x"><content><transition event="fake"/></content></send></onentry><transition event="real" target="b"/><invoke id="one"><content><scxml><state id="nested"><invoke id="nestedInvoke"/></state></scxml></content></invoke></state><state id="b"/></scxml>`;
+    const changed = updateTransition(source, { stateId: 'a', index: 0, event: 'updated', cond: '', targets: 'b' });
+    assert.match(changed, /<transition event="fake"\/>/);
+    assert.match(changed, /<transition event="updated" target="b"\/>/);
+    assert.strictEqual(readInvokeNavigationTargets(changed, 'a').length, 1);
+  });
+});

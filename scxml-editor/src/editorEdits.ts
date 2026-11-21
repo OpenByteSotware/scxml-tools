@@ -364,27 +364,52 @@ export interface ExecutableContentUpdate {
 const executableElementNames = new Set(['raise', 'log', 'assign', 'script', 'if', 'elseif', 'else', 'foreach', 'send', 'cancel', 'param', 'content']);
 
 export function readExecutableContent(text: string, stateId: string, location: ExecutableContentLocation, transitionIndex = 0): string {
-  const state = findState(text, stateId);
+  const state = findElementById(parseXmlSource(text), new Set(['state', 'parallel', 'final', 'history']), stateId);
   if (!state) { throw new Error(`State ${stateId} was not found.`); }
-  const body = text.slice(state.openEnd, state.end - (state.end > state.openEnd ? (`</${state.kind}>`).length : 0));
-  if (location === 'transition') {
-    const transition = findDirectChildElement(body, 'transition', transitionIndex);
-    return transition ? transition.inner.trim() : '';
-  }
-  const block = findDirectChildElement(body, location, 0);
-  return block ? block.inner.trim() : '';
+  const owner = location === 'transition' ? directChildren(state, 'transition')[transitionIndex] : directChildren(state, location)[0];
+  return owner ? text.slice(owner.openEnd, owner.closeStart).trim() : '';
 }
 
 export function updateExecutableContent(text: string, update: ExecutableContentUpdate): string {
-  const state = findState(text, update.stateId);
+  const state = findElementById(parseXmlSource(text), new Set(['state', 'parallel', 'final', 'history']), update.stateId);
   if (!state) { throw new Error(`State ${update.stateId} was not found.`); }
-  if (state.kind === 'history' && update.location !== 'transition') { throw new Error('History states do not support onentry or onexit content.'); }
+  if (state.localName === 'history' && update.location !== 'transition') { throw new Error('History states do not support onentry or onexit content.'); }
   const xml = String(update.xml ?? '').trim();
   validateExecutableFragment(xml);
   if (update.location === 'transition') {
-    return replaceTransitionExecutableContent(text, state, update.transitionIndex ?? 0, xml);
+    const transition = directChildren(state, 'transition')[update.transitionIndex ?? 0];
+    if (!transition) { throw new Error(`Transition ${(update.transitionIndex ?? 0) + 1} was not found in the selected state.`); }
+    return replaceElementBody(text, transition, xml);
   }
-  return replaceStateExecutableBlock(text, state, update.location, xml);
+  const existing = directChildren(state, update.location)[0];
+  if (existing) {
+    if (!xml) { return removeElementWithLeadingIndent(text, existing); }
+    return replaceElementBody(text, existing, xml);
+  }
+  if (!xml) { return text; }
+  return insertExecutableBlock(text, state, update.location, xml);
+}
+
+function replaceElementBody(text: string, element: XmlSourceElement, xml: string): string {
+  const openTag = text.slice(element.start, element.openEnd);
+  if (!xml) {
+    const empty = openTag.replace(/\/\s*>$/, '>').replace(/>$/, '/>');
+    return replaceRange(text, element.start, element.end, empty);
+  }
+  const indent = indentationAt(text, element.start);
+  const normalizedOpen = openTag.replace(/\/\s*>$/, '>');
+  return replaceRange(text, element.start, element.end, `${normalizedOpen}\n${indentFragment(xml, indent + '  ')}\n${indent}</${element.name}>`);
+}
+
+function insertExecutableBlock(text: string, state: XmlSourceElement, location: 'onentry' | 'onexit', xml: string): string {
+  const baseIndent = indentationAt(text, state.start);
+  const block = `${baseIndent}  <${location}>\n${indentFragment(xml, baseIndent + '    ')}\n${baseIndent}  </${location}>`;
+  if (state.selfClosing) {
+    const open = text.slice(state.start, state.openEnd).replace(/\/\s*>$/, '>');
+    return replaceRange(text, state.start, state.openEnd, `${open}\n${block}\n${baseIndent}</${state.name}>`);
+  }
+  if (location === 'onentry') { return replaceRange(text, state.openEnd, state.openEnd, `\n${block}`); }
+  return replaceRange(text, state.closeStart, state.closeStart, `\n${block}\n${baseIndent}`);
 }
 
 function validateExecutableFragment(xml: string): void {
@@ -499,63 +524,7 @@ function validateConditionalPlacement(xml: string): void {
   }
 }
 
-function replaceStateExecutableBlock(text: string, state: ReturnType<typeof findState> & {}, location: 'onentry' | 'onexit', xml: string): string {
-  const close = `</${state.kind}>`;
-  if (/\/\s*>$/.test(state.tag)) {
-    if (!xml) { return text; }
-    const lineStart = text.lastIndexOf('\n', state.start) + 1;
-    const indent = text.slice(lineStart, state.start).match(/^[ \t]*/)?.[0] ?? '';
-    const open = state.tag.replace(/\/\s*>$/, '>');
-    const block = formatExecutableBlock(location, xml, indent + '  ');
-    return text.slice(0, state.start) + `${open}\n${block}\n${indent}${close}` + text.slice(state.openEnd);
-  }
-  const bodyStart = state.openEnd;
-  const bodyEnd = state.end - close.length;
-  const body = text.slice(bodyStart, bodyEnd);
-  const existing = findDirectChildElement(body, location, 0);
-  if (existing) {
-    const start = bodyStart + existing.start;
-    if (!xml) { return text.slice(0, start) + text.slice(bodyStart + existing.end); }
-    const lineStart = text.lastIndexOf('\n', start) + 1;
-    const indent = text.slice(lineStart, start).match(/^[ \t]*/)?.[0] ?? '';
-    const replacement = formatExecutableBlock(location, xml, indent);
-    return text.slice(0, start) + replacement + text.slice(bodyStart + existing.end);
-  }
-  if (!xml) { return text; }
-  const lineStart = text.lastIndexOf('\n', state.start) + 1;
-  const parentIndent = text.slice(lineStart, state.start).match(/^[ \t]*/)?.[0] ?? '';
-  const block = formatExecutableBlock(location, xml, parentIndent + '  ');
-  return location === 'onentry'
-    ? text.slice(0, bodyStart) + `\n${block}` + text.slice(bodyStart)
-    : text.slice(0, bodyEnd) + `\n${block}\n${parentIndent}` + text.slice(bodyEnd);
-}
 
-function replaceTransitionExecutableContent(text: string, state: ReturnType<typeof findState> & {}, transitionIndex: number, xml: string): string {
-  const close = state.end > state.openEnd ? `</${state.kind}>` : '';
-  const bodyStart = state.openEnd;
-  const bodyEnd = state.end - close.length;
-  const body = text.slice(bodyStart, bodyEnd);
-  const transition = findDirectChildElement(body, 'transition', transitionIndex);
-  if (!transition) { throw new Error(`Transition ${transitionIndex + 1} was not found in the selected state.`); }
-  const absoluteStart = bodyStart + transition.start;
-  const original = text.slice(absoluteStart, bodyStart + transition.end);
-  const openTag = /^<transition\b[^>]*>/i.exec(original)?.[0];
-  if (!openTag) { throw new Error('Transition opening element was not found.'); }
-  if (!xml) {
-    const emptyTag = openTag.replace(/>$/, '/>');
-    return text.slice(0, absoluteStart) + emptyTag + text.slice(bodyStart + transition.end);
-  }
-  const lineStart = text.lastIndexOf('\n', absoluteStart) + 1;
-  const indent = text.slice(lineStart, absoluteStart).match(/^[ \t]*/)?.[0] ?? '';
-  const normalizedOpen = openTag.replace(/\/\s*>$/, '>');
-  const content = indentFragment(xml, indent + '  ');
-  const replacement = `${normalizedOpen}\n${content}\n${indent}</transition>`;
-  return text.slice(0, absoluteStart) + replacement + text.slice(bodyStart + transition.end);
-}
-
-function formatExecutableBlock(location: 'onentry' | 'onexit', xml: string, indent: string): string {
-  return `${indent}<${location}>\n${indentFragment(xml, indent + '  ')}\n${indent}</${location}>`;
-}
 
 function indentFragment(xml: string, indent: string): string {
   const lines = xml.trim().split(/\r?\n/);
@@ -564,14 +533,6 @@ function indentFragment(xml: string, indent: string): string {
   return lines.map(line => indent + line.slice(Math.min(common, line.length))).join('\n');
 }
 
-function findDirectChildElement(body: string, name: string, requestedIndex: number): { start: number; end: number; inner: string } | undefined {
-  const document = parseXmlSource(`<scope>${body}</scope>`);
-  const scope = document.roots[0];
-  const element = scope ? directChildren(scope, name)[requestedIndex] : undefined;
-  if (!element) { return undefined; }
-  const offset = '<scope>'.length;
-  return { start: element.start - offset, end: element.end - offset, inner: document.text.slice(element.openEnd, element.closeStart) };
-}
 export function readDoneData(text: string, stateId: string): DoneDataUpdate {
   const state = findElementById(parseXmlSource(text), new Set(['final']), stateId);
   if (!state) { return { stateId, mode: 'none' }; }
@@ -662,77 +623,67 @@ export function updateDataModel(text: string, update: DataModelUpdate): string {
 export interface InvokeUpdate { stateId: string; xml: string; }
 
 export function readInvokes(text: string, stateId: string): string {
-  const state = findState(text, stateId);
-  if (!state || state.kind === 'history' || state.kind === 'final') { return ''; }
-  const close = state.end > state.openEnd ? `</${state.kind}>` : '';
-  const bodyEnd = state.end - close.length;
-  const body = text.slice(state.openEnd, bodyEnd);
-  return findDirectInvokeElements(body).map(item => item.xml.trim()).join('\n');
+  const state = findElementById(parseXmlSource(text), new Set(['state', 'parallel']), stateId);
+  if (!state) { return ''; }
+  return directChildren(state, 'invoke').map(item => text.slice(item.start, item.end).trim()).join('\n');
 }
 
 export function updateInvokes(text: string, update: InvokeUpdate): string {
-  const state = findState(text, update.stateId);
+  const state = findElementById(parseXmlSource(text), new Set(['state', 'parallel', 'final', 'history']), update.stateId);
   if (!state) { throw new Error(`State ${update.stateId} was not found.`); }
-  if (state.kind === 'history' || state.kind === 'final') { throw new Error(`${state.kind} states cannot contain invoke elements.`); }
+  if (state.localName === 'history' || state.localName === 'final') { throw new Error(`${state.localName} states cannot contain invoke elements.`); }
   const xml = String(update.xml ?? '').trim();
   validateInvokeFragment(xml);
-  const close = state.end > state.openEnd ? `</${state.kind}>` : '';
-  const bodyStart = state.openEnd, bodyEnd = state.end - close.length;
-  const body = text.slice(bodyStart, bodyEnd);
-  const invokes = findDirectInvokeElements(body);
   let result = text;
-  for (const invoke of [...invokes].reverse()) {
-    result = result.slice(0, bodyStart + invoke.start) + result.slice(bodyStart + invoke.end);
-  }
+  const invokes = directChildren(state, 'invoke');
+  for (const invoke of [...invokes].reverse()) { result = removeElementWithLeadingIndent(result, invoke); }
   if (!xml) { return result; }
-  const refreshed = findState(result, update.stateId)!;
-  const lineStart = result.lastIndexOf('\n', refreshed.start) + 1;
-  const parentIndent = result.slice(lineStart, refreshed.start).match(/^[ \t]*/)?.[0] ?? '';
-  const formatted = indentFragment(xml, parentIndent + '  ');
-  if (/\/\s*>$/.test(refreshed.tag)) {
-    const open = refreshed.tag.replace(/\/\s*>$/, '>');
-    return result.slice(0, refreshed.start) + `${open}\n${formatted}\n${parentIndent}</${refreshed.kind}>` + result.slice(refreshed.openEnd);
+  const refreshed = findElementById(parseXmlSource(result), new Set(['state', 'parallel']), update.stateId)!;
+  const baseIndent = indentationAt(result, refreshed.start);
+  const formatted = normalizeIndent(xml, baseIndent + '  ');
+  if (refreshed.selfClosing) {
+    const open = result.slice(refreshed.start, refreshed.openEnd).replace(/\/\s*>$/, '>');
+    return replaceRange(result, refreshed.start, refreshed.openEnd, `${open}\n${formatted}\n${baseIndent}</${refreshed.name}>`);
   }
-  const insertion = refreshed.end - (`</${refreshed.kind}>`).length;
-  return result.slice(0, insertion) + `\n${formatted}\n${parentIndent}` + result.slice(insertion);
+  return replaceRange(result, refreshed.closeStart, refreshed.closeStart, `\n${formatted}\n${baseIndent}`);
 }
 
 function validateInvokeFragment(xml: string): void {
   if (!xml) { return; }
-  const items = findDirectInvokeElements(xml);
-  if (!items.length || items.map(item => item.xml).join('').replace(/\s+/g, '') !== xml.replace(/\s+/g, '')) {
-    throw new Error('Invocation content must contain only one or more invoke elements.');
+  const wrapped = `<scope>${xml}</scope>`;
+  const document = parseXmlSource(wrapped);
+  const scope = document.roots[0];
+  if (!scope || scope.localName !== 'scope') { throw new Error('Invocation content could not be parsed.'); }
+  const nonWhitespace = wrapped.slice(scope.openEnd, scope.closeStart);
+  const invokes = directChildren(scope, 'invoke');
+  if (!invokes.length) { throw new Error('Invocation content must contain one or more invoke elements.'); }
+  let cursor = scope.openEnd;
+  for (const invoke of invokes) {
+    if (wrapped.slice(cursor, invoke.start).trim()) { throw new Error('Invocation content must contain only invoke elements and whitespace.'); }
+    cursor = invoke.end;
+    validateInvokeElement(wrapped, invoke);
   }
-  for (const item of items) {
-    const open = /^<invoke\b([^>]*)>/i.exec(item.xml);
-    if (!open) { throw new Error('Invalid invoke element.'); }
-    const attrs = open[1];
-    validateExclusiveAttributePair(attrs, 'id', 'idlocation', 'invoke');
-    validateExclusiveAttributePair(attrs, 'type', 'typeexpr', 'invoke');
-    validateExclusiveAttributePair(attrs, 'src', 'srcexpr', 'invoke');
-    const body = item.xml.slice(open[0].length, item.xml.toLowerCase().lastIndexOf('</invoke>'));
-    const contentCount = (body.match(/<content\b/gi) || []).length;
-    const finalizeCount = (body.match(/<finalize\b/gi) || []).length;
-    if (contentCount > 1) { throw new Error('invoke may contain at most one content element.'); }
-    if (finalizeCount > 1) { throw new Error('invoke may contain at most one finalize element.'); }
-    if (contentCount && /\bsrc(?:expr)?\s*=/.test(attrs)) { throw new Error('invoke cannot combine src or srcexpr with content.'); }
-    for (const param of body.matchAll(/<param\b([^>]*)\/?\s*>/gi)) {
-      if (!/\bname\s*=/.test(param[1])) { throw new Error('invoke param requires name.'); }
-      validateExclusiveAttributePair(param[1], 'expr', 'location', 'invoke param');
-      if (!/\b(?:expr|location)\s*=/.test(param[1])) { throw new Error('invoke param requires expr or location.'); }
-    }
-    for (const finalize of body.matchAll(/<finalize\b[^>]*>([\s\S]*?)<\/finalize\s*>/gi)) {
-      validateExecutableFragment(finalize[1]);
-    }
-  }
+  if (wrapped.slice(cursor, scope.closeStart).trim() || !nonWhitespace.trim()) { throw new Error('Invocation content must contain only invoke elements and whitespace.'); }
 }
 
-function findDirectInvokeElements(body: string): Array<{ start: number; end: number; xml: string }> {
-  const document = parseXmlSource(`<scope>${body}</scope>`);
-  const scope = document.roots[0];
-  const offset = '<scope>'.length;
-  return scope ? directChildren(scope, 'invoke').map(element => ({ start: element.start - offset, end: element.end - offset, xml: document.text.slice(element.start, element.end) })) : [];
+function validateInvokeElement(text: string, invoke: XmlSourceElement): void {
+  const has = (name: string) => getAttribute(invoke, name) !== undefined;
+  for (const [literal, expression] of [['id','idlocation'],['type','typeexpr'],['src','srcexpr']]) {
+    if (has(literal) && has(expression)) { throw new Error(`invoke cannot define both ${literal} and ${expression}.`); }
+  }
+  const content = directChildren(invoke, 'content');
+  const finalize = directChildren(invoke, 'finalize');
+  if (content.length > 1) { throw new Error('invoke may contain at most one content element.'); }
+  if (finalize.length > 1) { throw new Error('invoke may contain at most one finalize element.'); }
+  if (content.length && (has('src') || has('srcexpr'))) { throw new Error('invoke cannot combine src or srcexpr with content.'); }
+  for (const param of directChildren(invoke, 'param')) {
+    if (!getAttribute(param, 'name')) { throw new Error('invoke param requires name.'); }
+    const expr = getAttribute(param, 'expr'), location = getAttribute(param, 'location');
+    if ((expr ? 1 : 0) + (location ? 1 : 0) !== 1) { throw new Error('invoke param requires exactly one of expr or location.'); }
+  }
+  for (const block of finalize) { validateExecutableFragment(text.slice(block.openEnd, block.closeStart)); }
 }
+
 export interface InvokeNavigationTarget {
   index: number;
   id?: string;
@@ -742,23 +693,17 @@ export interface InvokeNavigationTarget {
 }
 
 export function readInvokeNavigationTargets(text: string, stateId: string): InvokeNavigationTarget[] {
-  const xml = readInvokes(text, stateId);
-  if (!xml) { return []; }
-  return findDirectInvokeElements(xml).map((item, index) => {
-    const open = /^<invoke\b([^>]*)>/i.exec(item.xml);
-    const attrs = open?.[1] ?? '';
-    const id = readInvokeAttribute(attrs, 'id');
-    const src = readInvokeAttribute(attrs, 'src');
-    const content = /<content\b[^>]*>([\s\S]*?)<\/content\s*>/i.exec(item.xml)?.[1] ?? '';
-    const inlineScxml = /<scxml\b[\s\S]*<\/scxml\s*>/i.exec(content)?.[0];
+  const state = findElementById(parseXmlSource(text), new Set(['state', 'parallel']), stateId);
+  if (!state) { return []; }
+  return directChildren(state, 'invoke').map((invoke, index) => {
+    const id = getAttribute(invoke, 'id')?.value;
+    const src = getAttribute(invoke, 'src')?.value;
+    const content = directChildren(invoke, 'content')[0];
+    const inline = content ? directChildren(content).find(child => child.localName === 'scxml') : undefined;
+    const inlineScxml = inline ? text.slice(inline.start, inline.end) : undefined;
     return { index, id, src, inlineScxml, label: id || src || `invoke ${index + 1}` };
   });
 }
-
-function readInvokeAttribute(attrs: string, name: string): string | undefined {
-  return new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, 'i').exec(attrs)?.[2];
-}
-
 
 export interface InitialTransitionActionsUpdate {
   scopeId?: string;

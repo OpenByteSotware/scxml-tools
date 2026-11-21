@@ -125,85 +125,83 @@ export function deleteTransition(text:string,stateId:string,index:number):string
 }
 function escapeXml(value: string): string { return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
+
+function appendDirectChild(text: string, parentId: string, xml: string): string {
+  const parent = findElementById(parseXmlSource(text), new Set(['state', 'parallel']), parentId);
+  if (!parent) { throw new Error(`Parent state ${parentId} was not found.`); }
+  const baseIndent = indentationAt(text, parent.start);
+  const formatted = normalizeIndent(xml, baseIndent + '  ');
+  if (parent.selfClosing) {
+    const open = text.slice(parent.start, parent.openEnd).replace(/\/\s*>$/, '>');
+    return replaceRange(text, parent.start, parent.openEnd, `${open}\n${formatted}\n${baseIndent}</${parent.name}>`);
+  }
+  return replaceRange(text, parent.closeStart, parent.closeStart, `\n${formatted}\n${baseIndent}`);
+}
+
+function appendRootChild(text: string, xml: string): string {
+  const root = findRootElement(text);
+  if (!root) { throw new Error('The SCXML root element was not found.'); }
+  const baseIndent = indentationAt(text, root.start);
+  const formatted = normalizeIndent(xml, baseIndent + '  ');
+  if (root.selfClosing) {
+    const open = text.slice(root.start, root.openEnd).replace(/\/\s*>$/, '>');
+    return replaceRange(text, root.start, root.openEnd, `${open}\n${formatted}\n${baseIndent}</${root.name}>`);
+  }
+  return replaceRange(text, root.closeStart, root.closeStart, `\n${formatted}\n${baseIndent}`);
+}
+
+function removeStateInitialReference(text: string, ownerId: string | undefined, stateId: string): string {
+  const owner = ownerId
+    ? findElementById(parseXmlSource(text), new Set(['state', 'parallel']), ownerId)
+    : findRootElement(text);
+  return owner && getAttribute(owner, 'initial')?.value === stateId
+    ? setSourceAttribute(text, owner, 'initial', '')
+    : text;
+}
+
 export interface NewChildState { parentId: string; id: string; kind: string; initial: boolean; }
 
 export function createChildState(text: string, child: NewChildState): string {
-  const parent = findState(text, child.parentId);
+  const parent = findElementById(parseXmlSource(text), new Set(['state', 'parallel', 'final', 'history']), child.parentId);
   if (!parent) { throw new Error(`Parent state ${child.parentId} was not found.`); }
-  const depth = getStateDepth(text, child.parentId);
-  if (depth >= 64) { throw new Error('The editor supports a maximum state nesting depth of 64.'); }
-  if (parent.kind === 'final' || parent.kind === 'history') { throw new Error(`${parent.kind} cannot contain child states.`); }
-  const id = child.id.trim();
+  if (getStateDepth(text, child.parentId) >= 64) { throw new Error('The editor supports a maximum state nesting depth of 64.'); }
+  if (parent.localName === 'final' || parent.localName === 'history') { throw new Error(`${parent.localName} cannot contain child states.`); }
+  const id = String(child.id ?? '').trim();
   if (!id) { throw new Error('Child state ID is required.'); }
   if (findState(text, id)) { throw new Error(`State ${id} already exists.`); }
   const kind = /^(state|parallel|final|history)$/.test(child.kind) ? child.kind : 'state';
-  const parentLine = text.lastIndexOf('\n', parent.start) + 1;
-  const parentIndent = text.slice(parentLine, parent.start).match(/^[ \t]*/)?.[0] ?? '';
-  const childIndent = parentIndent + '  ';
-  let openTag = parent.tag;
-  if (child.initial && parent.kind === 'state') { openTag = setAttribute(openTag, 'initial', id); }
-  const childElement = `${childIndent}<${kind} id="${escapeXml(id)}"/>`;
-  if (/\/\s*>$/.test(parent.tag)) {
-    openTag = openTag.replace(/\/\s*>$/, '>');
-    return text.slice(0, parent.start) + `${openTag}\n${childElement}\n${parentIndent}</${parent.kind}>` + text.slice(parent.openEnd);
+  let result = appendDirectChild(text, child.parentId, `<${kind} id="${escapeXml(id)}"/>`);
+  if (child.initial && parent.localName === 'state') {
+    const refreshed = findElementById(parseXmlSource(result), new Set(['state']), child.parentId)!;
+    result = setSourceAttribute(result, refreshed, 'initial', id);
   }
-  return text.slice(0, parent.start) + openTag + text.slice(parent.openEnd, parent.end - (`</${parent.kind}>`).length) + `\n${childElement}\n${parentIndent}` + text.slice(parent.end - (`</${parent.kind}>`).length);
+  return result;
 }
-
 export interface NewParallelRegion { parallelId: string; regionId: string; initialStateId: string; }
 
 export function createParallelRegion(text: string, region: NewParallelRegion): string {
   const parallelId = String(region?.parallelId ?? '').trim();
-  const parent = findState(text, parallelId);
+  const parent = findElementById(parseXmlSource(text), new Set(['parallel']), parallelId);
   if (!parent) { throw new Error(`Parallel state ${parallelId} was not found.`); }
-  if (parent.kind !== 'parallel') { throw new Error(`${parallelId} is not a parallel state.`); }
-  const regionId = String(region?.regionId ?? '').trim();
-  const initialId = String(region?.initialStateId ?? '').trim();
+  const regionId = String(region?.regionId ?? '').trim(), initialId = String(region?.initialStateId ?? '').trim();
   if (!regionId || !initialId) { throw new Error('Region ID and initial state ID are required.'); }
-  if (findState(text, regionId)) { throw new Error(`State ${regionId} already exists.`); }
-  if (findState(text, initialId)) { throw new Error(`State ${initialId} already exists.`); }
-  const parentLine = text.lastIndexOf('\n', parent.start) + 1;
-  const parentIndent = text.slice(parentLine, parent.start).match(/^[ \t]*/)?.[0] ?? '';
-  const regionIndent = parentIndent + '  ';
-  const childIndent = regionIndent + '  ';
-  const element = `${regionIndent}<state id="${escapeXml(regionId)}" initial="${escapeXml(initialId)}">\n${childIndent}<state id="${escapeXml(initialId)}"/>\n${regionIndent}</state>`;
-  if (/\/\s*>$/.test(parent.tag)) {
-    const open = parent.tag.replace(/\/\s*>$/, '>');
-    return text.slice(0, parent.start) + `${open}\n${element}\n${parentIndent}</parallel>` + text.slice(parent.openEnd);
-  }
-  const close = `</parallel>`;
-  const closeStart = parent.end - close.length;
-  return text.slice(0, closeStart) + `\n${element}\n${parentIndent}` + text.slice(closeStart);
+  if (findState(text, regionId) || findState(text, initialId)) { throw new Error('Region and initial child IDs must be unique.'); }
+  return appendDirectChild(text, parallelId, `<state id="${escapeXml(regionId)}" initial="${escapeXml(initialId)}">\n  <state id="${escapeXml(initialId)}"/>\n</state>`);
 }
-
 
 export interface NewHistoryState { parentId: string; id: string; historyType: 'shallow' | 'deep'; defaultTarget?: string; }
 export interface HistoryUpdate { id: string; historyType: 'shallow' | 'deep'; defaultTarget?: string; }
-
 export function createHistoryState(text: string, history: NewHistoryState): string {
-  const parentId = String(history.parentId ?? '').trim();
-  const id = String(history.id ?? '').trim();
-  const type = history.historyType === 'deep' ? 'deep' : 'shallow';
-  const target = String(history.defaultTarget ?? '').trim();
+  const parentId = String(history.parentId ?? '').trim(), id = String(history.id ?? '').trim();
+  const type = history.historyType === 'deep' ? 'deep' : 'shallow', target = String(history.defaultTarget ?? '').trim();
   if (!parentId || !id) { throw new Error('History parent and ID are required.'); }
   if (findState(text, id)) { throw new Error(`State ${id} already exists.`); }
-  const parent = findState(text, parentId);
+  const parent = findElementById(parseXmlSource(text), new Set(['state', 'parallel']), parentId);
   if (!parent) { throw new Error(`History parent ${parentId} was not found.`); }
-  if (parent.kind !== 'state' && parent.kind !== 'parallel') { throw new Error('History may only be added to state or parallel containers.'); }
   if (target && !findState(text, target)) { throw new Error(`Default history target ${target} was not found.`); }
-  const parentLine = text.lastIndexOf('\n', parent.start) + 1;
-  const parentIndent = text.slice(parentLine, parent.start).match(/^[ \t]*/)?.[0] ?? '';
-  const indent = parentIndent + '  ';
-  const transition = target ? `\n${indent}  <transition target="${escapeXml(target)}"/>\n${indent}` : '';
-  const element = `${indent}<history id="${escapeXml(id)}" type="${type}">${transition}</history>`;
-  if (/\/\s*>$/.test(parent.tag)) {
-    const open = parent.tag.replace(/\/\s*>$/, '>');
-    return text.slice(0, parent.start) + `${open}\n${element}\n${parentIndent}</${parent.kind}>` + text.slice(parent.openEnd);
-  }
-  const close = `</${parent.kind}>`; const closeStart = parent.end - close.length;
-  return text.slice(0, closeStart) + `\n${element}\n${parentIndent}` + text.slice(closeStart);
+  const body = target ? `\n  <transition target="${escapeXml(target)}"/>\n` : '';
+  return appendDirectChild(text, parentId, `<history id="${escapeXml(id)}" type="${type}">${body}</history>`);
 }
-
 export function updateHistoryState(text: string, update: HistoryUpdate): string {
   let history = findElementById(parseXmlSource(text), new Set(['history']), update.id);
   if (!history) throw new Error(`History ${update.id} was not found.`);
@@ -226,69 +224,25 @@ export function getStateDepth(text: string, id: string): number {
 export interface ReparentStateRequest { stateId: string; newParentId?: string; }
 
 export function reparentState(text: string, request: ReparentStateRequest): string {
-  const stateId = String(request.stateId ?? '').trim();
-  const newParentId = String(request.newParentId ?? '').trim();
+  const stateId = String(request.stateId ?? '').trim(), newParentId = String(request.newParentId ?? '').trim();
   if (!stateId) { throw new Error('State ID is required.'); }
   if (stateId === newParentId) { throw new Error('A state cannot contain itself.'); }
-
-  const source = findState(text, stateId);
+  const document = parseXmlSource(text);
+  const source = findElementById(document, new Set(['state', 'parallel', 'final', 'history']), stateId);
   if (!source) { throw new Error(`State ${stateId} was not found.`); }
-  const parent = newParentId ? findState(text, newParentId) : undefined;
-  if (newParentId && !parent) { throw new Error(`Destination state ${newParentId} was not found.`); }
-  if (parent && (parent.kind === 'final' || parent.kind === 'history')) { throw new Error(`${parent.kind} cannot contain child states.`); }
-  if (parent && parent.start >= source.start && parent.end <= source.end) { throw new Error('A state cannot be moved into one of its descendants.'); }
-  if (parent && getStateDepth(text, newParentId) >= 64) { throw new Error('The editor supports a maximum state nesting depth of 64.'); }
-
-  const oldParent = findImmediateParent(text, source);
-  if ((oldParent?.id ?? '') === newParentId) { return text; }
-
-  let removeStart = source.start;
-  while (removeStart > 0 && (text[removeStart - 1] === ' ' || text[removeStart - 1] === '\t')) { removeStart--; }
-  if (removeStart > 0 && text[removeStart - 1] === '\n') { removeStart--; }
-  let removeEnd = source.end;
-  if (removeEnd < text.length && text[removeEnd] === '\r') { removeEnd++; }
-  if (removeEnd < text.length && text[removeEnd] === '\n') { removeEnd++; }
-
+  const destination = newParentId ? findElementById(document, new Set(['state', 'parallel']), newParentId) : undefined;
+  if (newParentId && !destination) { throw new Error(`Destination state ${newParentId} was not found or cannot contain children.`); }
+  if (destination && destination.start >= source.start && destination.end <= source.end) { throw new Error('A state cannot be moved into one of its descendants.'); }
+  if (destination && getStateDepth(text, newParentId) >= 64) { throw new Error('The editor supports a maximum state nesting depth of 64.'); }
+  let oldParent = source.parent;
+  while (oldParent && !['state', 'parallel'].includes(oldParent.localName)) { oldParent = oldParent.parent; }
+  const oldParentId = oldParent ? getAttribute(oldParent, 'id')?.value : undefined;
+  if ((oldParentId ?? '') === newParentId) { return text; }
   const sourceXml = text.slice(source.start, source.end);
-  let without = text.slice(0, removeStart) + text.slice(removeEnd);
-  if (oldParent) {
-    const refreshedOldParent = findState(without, oldParent.id);
-    if (refreshedOldParent) {
-      const changedTag = refreshedOldParent.tag.replace(new RegExp(`(\\sinitial\\s*=\\s*)(["'])${escapeRegExp(stateId)}\\2`, 'i'), '');
-      without = without.slice(0, refreshedOldParent.start) + changedTag + without.slice(refreshedOldParent.openEnd);
-    }
-  } else {
-    const root = /<scxml\b[^>]*>/i.exec(without);
-    if (root) {
-      const changed = root[0].replace(new RegExp(`(\\sinitial\\s*=\\s*)(["'])${escapeRegExp(stateId)}\\2`, 'i'), '');
-      without = without.slice(0, root.index) + changed + without.slice(root.index + root[0].length);
-    }
-  }
-
-  if (!newParentId) {
-    const rootClose = without.lastIndexOf('</scxml>');
-    if (rootClose < 0) { throw new Error('The SCXML closing element was not found.'); }
-    const normalized = normalizeIndent(sourceXml, '  ');
-    const separator = rootClose > 0 && without[rootClose - 1] === '\n' ? '' : '\n';
-    return without.slice(0, rootClose) + separator + normalized + '\n' + without.slice(rootClose);
-  }
-
-  const destination = findState(without, newParentId);
-  if (!destination) { throw new Error(`Destination state ${newParentId} was not found after moving the source.`); }
-  const parentLine = without.lastIndexOf('\n', destination.start) + 1;
-  const parentIndent = without.slice(parentLine, destination.start).match(/^[ \t]*/)?.[0] ?? '';
-  const normalized = normalizeIndent(sourceXml, parentIndent + '  ');
-
-  if (/\/\s*>$/.test(destination.tag)) {
-    const open = destination.tag.replace(/\/\s*>$/, '>');
-    const replacement = `${open}\n${normalized}\n${parentIndent}</${destination.kind}>`;
-    return without.slice(0, destination.start) + replacement + without.slice(destination.openEnd);
-  }
-  const close = `</${destination.kind}>`;
-  const closeStart = destination.end - close.length;
-  return without.slice(0, closeStart) + `${normalized}\n${parentIndent}` + without.slice(closeStart);
+  let result = removeElementWithLeadingIndent(text, source);
+  result = removeStateInitialReference(result, oldParentId, stateId);
+  return newParentId ? appendDirectChild(result, newParentId, sourceXml) : appendRootChild(result, sourceXml);
 }
-
 function normalizeIndent(xml: string, indent: string): string {
   const lines = xml.split(/\r?\n/);
   const nonBlank = lines.filter(line => line.trim().length > 0);

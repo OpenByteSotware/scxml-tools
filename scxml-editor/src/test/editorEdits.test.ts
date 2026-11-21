@@ -354,3 +354,27 @@ suite('Stage 17 source-preserving mutations', () => {
     assert.strictEqual(readInvokeNavigationTargets(changed, 'a').length, 1);
   });
 });
+
+suite('Stage 18 source-tree migration', () => {
+  test('updates root properties while preserving comments, extensions, quote styles, and child bytes', () => {
+    const source = `<?xml version="1.0"?>\n<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' vendor:keep="x"><!--keep--><vendor:meta/><state id="idle"/></scxml>`;
+    const changed = updateRootProperties(source, { name: 'Machine', version: '1.0', namespace: 'http://www.w3.org/2005/07/scxml', initialTarget: 'idle', explicitInitial: false });
+    assert.match(changed, /vendor:keep="x"/); assert.match(changed, /<!--keep--><vendor:meta\/><state id="idle"\/>/); assert.match(changed, /initial="idle"/);
+  });
+  test('reads and replaces only direct datamodel and donedata nodes', () => {
+    const source = `<scxml><datamodel><data id="root" expr="1"/></datamodel><state id="owner"><invoke><content><scxml><datamodel><data id="nested" expr="2"/></datamodel></scxml></content></invoke></state><final id="done"><donedata><content><vendor:value/></content></donedata></final></scxml>`;
+    const updated = updateDataModel(source, { declarations: [{ id: 'root2', mode: 'expr', value: '3' }] });
+    assert.match(updated, /id="root2" expr="3"/); assert.match(updated, /id="nested" expr="2"/);
+    assert.deepStrictEqual(readDataModel(updated).map(item => item.id), ['root2']);
+  });
+  test('replaces only the direct inline invoked scxml child', () => {
+    const source = `<scxml><state id="owner"><invoke id="one"><content><!--keep--><vendor:wrapper/><scxml version="1.0"><state id="old"/></scxml></content></invoke><invoke id="two"><content><scxml><state id="other"/></scxml></content></invoke></state></scxml>`;
+    const changed = updateInlineInvokeContent(source, { stateId: 'owner', invokeIndex: 0, scxml: `<scxml version="1.0"><final id="done"/></scxml>` });
+    assert.match(changed, /<!--keep--><vendor:wrapper\/><scxml version="1.0"><final id="done"\/><\/scxml>/); assert.match(changed, /id="other"/);
+  });
+  test('updates explicit initial actions without touching nested content transitions', () => {
+    const source = `<scxml><initial><transition target="idle"><log expr="old"/></transition></initial><state id="idle"><onentry><send event="x"><content><transition event="fake"/></content></send></onentry></state></scxml>`;
+    const changed = updateInitialTransitionActions(source, { xml: `<raise event="ready"/>` });
+    assert.match(changed, /<initial><transition target="idle">[\s\S]*<raise event="ready"\/>/); assert.match(changed, /<transition event="fake"\/>/);
+  });
+});

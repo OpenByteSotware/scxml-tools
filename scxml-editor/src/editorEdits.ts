@@ -1,5 +1,5 @@
 import { parseScxml } from './scxml';
-import { directChildren, findElementById, getAttribute, parseXmlSource, setSourceAttribute, XmlSourceElement } from './xmlSource';
+import { directChildren, findElementById, getAttribute, parseXmlSource, replaceRange, setSourceAttribute, XmlSourceElement } from './xmlSource';
 export interface StateUpdate { oldId: string; id: string; kind: string; initial: boolean; parallel?: boolean; }
 export interface TransitionUpdate { stateId: string; index: number; event: string; cond: string; targets: string; type?: '' | 'internal' | 'external'; }
 export interface DoneDataUpdate { stateId: string; mode: 'none' | 'expr' | 'content' | 'params'; expression?: string; content?: string; params?: Array<{ name: string; expr?: string; location?: string }>; }
@@ -372,6 +372,31 @@ function findImmediateParent(text: string, source: { start: number; end: number 
   const id = parent ? getAttribute(parent, 'id')?.value : undefined;
   return parent && id ? { id, start: parent.start, end: parent.end } : undefined;
 }
+
+function findRootElement(text: string): XmlSourceElement | undefined {
+  return parseXmlSource(text).roots.find(element => element.localName === 'scxml');
+}
+
+function findScopeElement(text: string, scopeId?: string): XmlSourceElement | undefined {
+  return scopeId ? findElementById(parseXmlSource(text), new Set(['state', 'parallel']), scopeId) : findRootElement(text);
+}
+
+function directChildOf(text: string, scope: XmlSourceElement, localName: string, index = 0): XmlSourceElement | undefined {
+  return directChildren(scope, localName)[index];
+}
+
+function indentationAt(text: string, offset: number): string {
+  const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
+  return text.slice(lineStart, offset).match(/^[ \t]*/)?.[0] ?? '';
+}
+
+function removeElementWithLeadingIndent(text: string, element: XmlSourceElement): string {
+  let start = element.start;
+  while (start > 0 && (text[start - 1] === ' ' || text[start - 1] === '\t')) { start--; }
+  if (start > 0 && text[start - 1] === '\n') { start--; }
+  return replaceRange(text, start, element.end, '');
+}
+
 export interface RootPropertiesUpdate {
   name?: string;
   version: string;
@@ -392,22 +417,28 @@ export interface ExplicitInitialUpdate {
 }
 
 export function updateRootProperties(text: string, update: RootPropertiesUpdate): string {
-  const root = /<scxml\b[^>]*>/i.exec(text);
+  const root = findRootElement(text);
   if (!root) { throw new Error('The SCXML root element was not found.'); }
   const target = String(update.initialTarget ?? '').trim();
   if (target && !findState(text, target)) { throw new Error(`Initial target ${target} was not found.`); }
-  let tag = root[0];
-  tag = setAttribute(tag, 'version', update.version.trim() || '1.0');
-  tag = setAttribute(tag, 'xmlns', update.namespace.trim() || 'http://www.w3.org/2005/07/scxml');
-  tag = setAttribute(tag, 'name', String(update.name ?? '').trim());
-  tag = setAttribute(tag, 'datamodel', String(update.datamodel ?? '').trim());
-  tag = setAttribute(tag, 'binding', String(update.binding ?? '').trim());
-  tag = setAttribute(tag, 'xml:base', String(update.xmlBase ?? '').trim());
-  tag = setAttribute(tag, 'initial', update.explicitInitial ? '' : target);
-  let result = text.slice(0, root.index) + tag + text.slice(root.index + root[0].length);
+  let result = text;
+  const attributes: Array<[string, string]> = [
+    ['version', update.version.trim() || '1.0'],
+    ['xmlns', update.namespace.trim() || 'http://www.w3.org/2005/07/scxml'],
+    ['name', String(update.name ?? '').trim()],
+    ['datamodel', String(update.datamodel ?? '').trim()],
+    ['binding', String(update.binding ?? '').trim()],
+    ['xml:base', String(update.xmlBase ?? '').trim()],
+    ['initial', update.explicitInitial ? '' : target]
+  ];
+  // Reparse after each splice because source offsets change while preserving all untouched bytes.
+  for (const [name, value] of attributes) {
+    const current = findRootElement(result);
+    if (!current) { throw new Error('The SCXML root element was lost while updating attributes.'); }
+    result = setSourceAttribute(result, current, name, value);
+  }
   return setExplicitInitialElement(result, undefined, target, String(update.initialCond ?? '').trim(), update.explicitInitial);
 }
-
 export function updateExplicitInitial(text: string, update: ExplicitInitialUpdate): string {
   const target = String(update.target ?? '').trim();
   if (!target) { throw new Error('Initial transition target is required.'); }
@@ -416,46 +447,26 @@ export function updateExplicitInitial(text: string, update: ExplicitInitialUpdat
 }
 
 function setExplicitInitialElement(text: string, scopeId: string | undefined, target: string, cond: string, explicit: boolean): string {
-  const scope = scopeId ? findState(text, scopeId) : undefined;
-  const root = !scopeId ? /<scxml\b[^>]*>/i.exec(text) : undefined;
-  if (scopeId && !scope) { throw new Error(`State ${scopeId} was not found.`); }
-  const openStart = scope ? scope.start : root!.index;
-  const openEnd = scope ? scope.openEnd : root!.index + root![0].length;
-  const closeName = scope ? scope.kind : 'scxml';
-  const scopeEnd = scope ? scope.end : text.lastIndexOf('</scxml>') + '</scxml>'.length;
-  let openTag = scope ? scope.tag : root![0];
-  openTag = setAttribute(openTag, 'initial', explicit ? '' : target);
-  let result = text.slice(0, openStart) + openTag + text.slice(openEnd);
-  const delta = openTag.length - (scope ? scope.tag.length : root![0].length);
-  const adjustedOpenEnd = openEnd + delta;
-  const adjustedScopeEnd = scopeEnd + delta;
-  const body = result.slice(adjustedOpenEnd, adjustedScopeEnd);
-  const initialPattern = /<initial\b[^>]*>[\s\S]*?<\/initial\s*>/i;
-  const existing = initialPattern.exec(body);
-  if (!explicit) {
-    if (!existing) { return result; }
-    const start = adjustedOpenEnd + existing.index;
-    return result.slice(0, start) + result.slice(start + existing[0].length);
-  }
+  let result = text;
+  let scope = findScopeElement(result, scopeId);
+  if (!scope) { throw new Error(scopeId ? `State ${scopeId} was not found.` : 'The SCXML root element was not found.'); }
+  result = setSourceAttribute(result, scope, 'initial', explicit ? '' : target);
+  scope = findScopeElement(result, scopeId)!;
+  const existing = directChildOf(result, scope, 'initial');
+  if (!explicit) { return existing ? removeElementWithLeadingIndent(result, existing) : result; }
   if (!target) { throw new Error('Explicit initial transition requires a target.'); }
   let transition = '<transition/>';
   transition = setAttribute(transition, 'target', target);
   transition = setAttribute(transition, 'cond', cond);
-  const lineStart = result.lastIndexOf('\n', openStart) + 1;
-  const parentIndent = result.slice(lineStart, openStart).match(/^[ \t]*/)?.[0] ?? '';
+  const parentIndent = indentationAt(result, scope.start);
   const element = `${parentIndent}  <initial>\n${parentIndent}    ${transition}\n${parentIndent}  </initial>`;
-  if (existing) {
-    const start = adjustedOpenEnd + existing.index;
-    return result.slice(0, start) + element + result.slice(start + existing[0].length);
+  if (existing) { return replaceRange(result, existing.start, existing.end, element); }
+  if (scope.selfClosing) {
+    const open = result.slice(scope.start, scope.openEnd).replace(/\/\s*>$/, '>');
+    return replaceRange(result, scope.start, scope.openEnd, `${open}\n${element}\n${parentIndent}</${scope.name}>`);
   }
-  if (/\/\s*>$/.test(openTag)) {
-    const expanded = openTag.replace(/\/\s*>$/, '>');
-    return result.slice(0, openStart) + `${expanded}\n${element}\n${parentIndent}</${closeName}>` + result.slice(adjustedOpenEnd);
-  }
-  return result.slice(0, adjustedOpenEnd) + `\n${element}` + result.slice(adjustedOpenEnd);
+  return replaceRange(result, scope.openEnd, scope.openEnd, `\n${element}`);
 }
-
-
 export type ExecutableContentLocation = 'onentry' | 'onexit' | 'transition';
 export interface ExecutableContentUpdate {
   stateId: string;
@@ -676,41 +687,32 @@ function findDirectChildElement(body: string, name: string, requestedIndex: numb
   return { start: element.start - offset, end: element.end - offset, inner: document.text.slice(element.openEnd, element.closeStart) };
 }
 export function readDoneData(text: string, stateId: string): DoneDataUpdate {
-  const state = findState(text, stateId);
-  if (!state || state.kind !== 'final') { return { stateId, mode: 'none' }; }
-  const body = text.slice(state.openEnd, state.end - '</final>'.length);
-  const done = /<donedata\b[^>]*>([\s\S]*?)<\/donedata\s*>/i.exec(body);
+  const state = findElementById(parseXmlSource(text), new Set(['final']), stateId);
+  if (!state) { return { stateId, mode: 'none' }; }
+  const done = directChildOf(text, state, 'donedata');
   if (!done) { return { stateId, mode: 'none' }; }
-  const content = /<content\b([^>]*)>([\s\S]*?)<\/content\s*>|<content\b([^>]*)\/>/i.exec(done[1]);
+  const content = directChildOf(text, done, 'content');
   if (content) {
-    const attrs = content[1] || content[3] || '';
-    const expr = /\bexpr\s*=\s*(["'])(.*?)\1/i.exec(attrs)?.[2];
-    return expr !== undefined ? { stateId, mode: 'expr', expression: expr } : { stateId, mode: 'content', content: (content[2] || '').trim() };
+    const expr = getAttribute(content, 'expr')?.value;
+    return expr !== undefined ? { stateId, mode: 'expr', expression: expr } : { stateId, mode: 'content', content: text.slice(content.openEnd, content.closeStart).trim() };
   }
-  const params = [...done[1].matchAll(/<param\b([^>]*)\/>/gi)].map(match => ({
-    name: /\bname\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2] || '',
-    expr: /\bexpr\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2],
-    location: /\blocation\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2]
-  }));
+  const params = directChildren(done, 'param').map(param => ({ name: getAttribute(param, 'name')?.value || '', expr: getAttribute(param, 'expr')?.value, location: getAttribute(param, 'location')?.value }));
   return params.length ? { stateId, mode: 'params', params } : { stateId, mode: 'none' };
 }
 
 export function updateDoneData(text: string, update: DoneDataUpdate): string {
-  const state = findState(text, update.stateId);
-  if (!state || state.kind !== 'final') { throw new Error(`Final state ${update.stateId} was not found.`); }
-  const mode = update.mode || 'none';
+  const document = parseXmlSource(text);
+  const state = findElementById(document, new Set(['final']), update.stateId);
+  if (!state) { throw new Error(`Final state ${update.stateId} was not found.`); }
   let inner = '';
-  if (mode === 'expr') {
-    const expression = String(update.expression ?? '').trim();
-    if (!expression) { throw new Error('Done-data expression is required.'); }
+  if (update.mode === 'expr') {
+    const expression = String(update.expression ?? '').trim(); if (!expression) { throw new Error('Done-data expression is required.'); }
     inner = `<content expr="${escapeXml(expression)}"/>`;
-  } else if (mode === 'content') {
-    const content = String(update.content ?? '').trim();
-    if (!content) { throw new Error('Done-data inline content is required.'); }
+  } else if (update.mode === 'content') {
+    const content = String(update.content ?? '').trim(); if (!content) { throw new Error('Done-data inline content is required.'); }
     inner = `<content>${content}</content>`;
-  } else if (mode === 'params') {
-    const params = update.params ?? [];
-    if (!params.length) { throw new Error('At least one done-data parameter is required.'); }
+  } else if (update.mode === 'params') {
+    const params = update.params ?? []; if (!params.length) { throw new Error('At least one done-data parameter is required.'); }
     inner = params.map(param => {
       const name = String(param.name ?? '').trim(), expr = String(param.expr ?? '').trim(), location = String(param.location ?? '').trim();
       if (!name) { throw new Error('Each done-data parameter requires a name.'); }
@@ -718,105 +720,59 @@ export function updateDoneData(text: string, update: DoneDataUpdate): string {
       return `<param name="${escapeXml(name)}" ${expr ? `expr="${escapeXml(expr)}"` : `location="${escapeXml(location)}"`}/>`;
     }).join('\n');
   }
-  const close = '</final>';
-  const bodyStart = state.openEnd, bodyEnd = state.end > state.openEnd ? state.end - close.length : state.openEnd;
-  const body = text.slice(bodyStart, bodyEnd);
-  const existing = /\s*<donedata\b[^>]*>[\s\S]*?<\/donedata\s*>/i.exec(body);
-  let result = text;
-  if (existing) {
-    const start = bodyStart + existing.index;
-    result = text.slice(0, start) + text.slice(start + existing[0].length);
+  const existing = directChildOf(text, state, 'donedata');
+  let result = existing ? removeElementWithLeadingIndent(text, existing) : text;
+  if (update.mode === 'none') { return result; }
+  const refreshed = findElementById(parseXmlSource(result), new Set(['final']), update.stateId)!;
+  const parentIndent = indentationAt(result, refreshed.start), indent = parentIndent + '  ';
+  const block = `${indent}<donedata>\n${indentFragment(inner, indent + '  ')}\n${indent}</donedata>`;
+  if (refreshed.selfClosing) {
+    const open = result.slice(refreshed.start, refreshed.openEnd).replace(/\/\s*>$/, '>');
+    return replaceRange(result, refreshed.start, refreshed.openEnd, `${open}\n${block}\n${parentIndent}</${refreshed.name}>`);
   }
-  if (mode === 'none') { return result; }
-  const refreshed = findState(result, update.stateId)!;
-  const lineStart = result.lastIndexOf('\n', refreshed.start) + 1;
-  const indent = (result.slice(lineStart, refreshed.start).match(/^[ \t]*/)?.[0] ?? '') + '  ';
-  const formatted = `<donedata>\n${indentFragment(inner, indent + '  ')}\n${indent}</donedata>`;
-  if (/\/\s*>$/.test(refreshed.tag)) {
-    const open = refreshed.tag.replace(/\/\s*>$/, '>');
-    const parentIndent = indent.slice(0, -2);
-    return result.slice(0, refreshed.start) + `${open}\n${indent}${formatted}\n${parentIndent}</final>` + result.slice(refreshed.openEnd);
-  }
-  const insert = refreshed.end - close.length;
-  return result.slice(0, insert) + `\n${indent}${formatted}\n${indent.slice(0, -2)}` + result.slice(insert);
+  return replaceRange(result, refreshed.closeStart, refreshed.closeStart, `\n${block}\n${parentIndent}`);
 }
-
-
 export interface DataDeclarationUpdate { id: string; mode: 'expr' | 'src' | 'content'; value: string; }
 export interface DataModelUpdate { scopeId?: string; declarations: DataDeclarationUpdate[]; }
 
 export function readDataModel(text: string, scopeId?: string): DataDeclarationUpdate[] {
-  const region = getDataModelScope(text, scopeId);
-  if (!region) { return []; }
-  const block = /<datamodel\b[^>]*>([\s\S]*?)<\/datamodel\s*>/i.exec(region.body);
-  if (!block) { return []; }
-  return [...block[1].matchAll(/<data\b([^>]*?)(?:\/>|>([\s\S]*?)<\/data\s*>)/gi)].map(match => {
-    const attrs = match[1];
-    const id = readXmlAttribute(attrs, 'id') || '';
-    const expr = readXmlAttribute(attrs, 'expr');
-    const src = readXmlAttribute(attrs, 'src');
-    return expr !== undefined ? { id, mode: 'expr' as const, value: expr }
-      : src !== undefined ? { id, mode: 'src' as const, value: src }
-      : { id, mode: 'content' as const, value: (match[2] || '').trim() };
+  const scope = findScopeElement(text, scopeId); if (!scope) { return []; }
+  const model = directChildOf(text, scope, 'datamodel'); if (!model) { return []; }
+  return directChildren(model, 'data').map(data => {
+    const id = getAttribute(data, 'id')?.value || '', expr = getAttribute(data, 'expr')?.value, src = getAttribute(data, 'src')?.value;
+    return expr !== undefined ? { id, mode: 'expr' as const, value: expr } : src !== undefined ? { id, mode: 'src' as const, value: src } : { id, mode: 'content' as const, value: text.slice(data.openEnd, data.closeStart).trim() };
   });
 }
 
 export function updateDataModel(text: string, update: DataModelUpdate): string {
-  const declarations = update.declarations ?? [];
-  const seen = new Set<string>();
+  const declarations = update.declarations ?? [], seen = new Set<string>();
   for (const item of declarations) {
-    const id = String(item.id ?? '').trim();
-    const value = String(item.value ?? '').trim();
+    const id = String(item.id ?? '').trim(), value = String(item.value ?? '').trim();
     if (!id) { throw new Error('Every data declaration requires an ID.'); }
-    if (seen.has(id)) { throw new Error(`Duplicate data ID in this scope: ${id}.`); }
-    seen.add(id);
+    if (seen.has(id)) { throw new Error(`Duplicate data ID in this scope: ${id}.`); } seen.add(id);
     if (!/^[A-Za-z_][\w.-]*$/.test(id)) { throw new Error(`Data ID ${id} is not a valid XML identifier.`); }
     if (!value) { throw new Error(`Data declaration ${id} requires an expression, source, or inline content.`); }
   }
-  const scope = getDataModelScope(text, update.scopeId);
+  const scope = findScopeElement(text, update.scopeId);
   if (!scope) { throw new Error(update.scopeId ? `State ${update.scopeId} was not found.` : 'The SCXML root element was not found.'); }
-  const existing = /\s*<datamodel\b[^>]*>[\s\S]*?<\/datamodel\s*>/i.exec(scope.body);
-  let result = text;
-  if (existing) {
-    const start = scope.bodyStart + existing.index;
-    result = text.slice(0, start) + text.slice(start + existing[0].length);
-  }
+  const existing = directChildOf(text, scope, 'datamodel');
+  let result = existing ? removeElementWithLeadingIndent(text, existing) : text;
   if (!declarations.length) { return result; }
-  const refreshed = getDataModelScope(result, update.scopeId)!;
-  const lineStart = result.lastIndexOf('\n', refreshed.openStart) + 1;
-  const parentIndent = result.slice(lineStart, refreshed.openStart).match(/^[ \t]*/)?.[0] ?? '';
-  const indent = parentIndent + '  ';
+  const refreshed = findScopeElement(result, update.scopeId)!;
+  const parentIndent = indentationAt(result, refreshed.start), indent = parentIndent + '  ';
   const items = declarations.map(item => {
-    const id = escapeXml(item.id.trim()); const value = String(item.value).trim();
+    const id = escapeXml(item.id.trim()), value = String(item.value).trim();
     if (item.mode === 'expr') { return `${indent}  <data id="${id}" expr="${escapeXml(value)}"/>`; }
     if (item.mode === 'src') { return `${indent}  <data id="${id}" src="${escapeXml(value)}"/>`; }
     return `${indent}  <data id="${id}">${value}</data>`;
   }).join('\n');
   const block = `${indent}<datamodel>\n${items}\n${indent}</datamodel>`;
-  if (/\/\s*>$/.test(refreshed.openTag)) {
-    const expanded = refreshed.openTag.replace(/\/\s*>$/, '>');
-    return result.slice(0, refreshed.openStart) + `${expanded}\n${block}\n${parentIndent}</${refreshed.closeName}>` + result.slice(refreshed.openEnd);
+  if (refreshed.selfClosing) {
+    const open = result.slice(refreshed.start, refreshed.openEnd).replace(/\/\s*>$/, '>');
+    return replaceRange(result, refreshed.start, refreshed.openEnd, `${open}\n${block}\n${parentIndent}</${refreshed.name}>`);
   }
-  return result.slice(0, refreshed.bodyStart) + `\n${block}` + result.slice(refreshed.bodyStart);
+  return replaceRange(result, refreshed.openEnd, refreshed.openEnd, `\n${block}`);
 }
-
-function readXmlAttribute(attrs: string, name: string): string | undefined {
-  return new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, 'i').exec(attrs)?.[2];
-}
-
-function getDataModelScope(text: string, scopeId?: string): { openStart: number; openEnd: number; bodyStart: number; bodyEnd: number; body: string; openTag: string; closeName: string } | undefined {
-  if (scopeId) {
-    const state = findState(text, scopeId); if (!state) { return undefined; }
-    const closeName = state.kind;
-    const bodyEnd = state.end > state.openEnd ? state.end - (`</${closeName}>`).length : state.openEnd;
-    return { openStart: state.start, openEnd: state.openEnd, bodyStart: state.openEnd, bodyEnd, body: text.slice(state.openEnd, bodyEnd), openTag: state.tag, closeName };
-  }
-  const root = /<scxml\b[^>]*>/i.exec(text); const closeStart = text.lastIndexOf('</scxml>');
-  if (!root || closeStart < 0) { return undefined; }
-  return { openStart: root.index, openEnd: root.index + root[0].length, bodyStart: root.index + root[0].length, bodyEnd: closeStart, body: text.slice(root.index + root[0].length, closeStart), openTag: root[0], closeName: 'scxml' };
-}
-
-
 export interface InvokeUpdate { stateId: string; xml: string; }
 
 export function readInvokes(text: string, stateId: string): string {
@@ -924,80 +880,44 @@ export interface InitialTransitionActionsUpdate {
 }
 
 export function readInitialTransitionActions(text: string, scopeId?: string): string {
-  const region = getInitialTransitionScope(text, scopeId);
-  if (!region) { return ''; }
-  const initial = /<initial\b[^>]*>([\s\S]*?)<\/initial\s*>/i.exec(region.body);
-  if (!initial) { return ''; }
-  const transition = /<transition\b[^>]*>([\s\S]*?)<\/transition\s*>/i.exec(initial[1]);
-  return transition ? transition[1].trim() : '';
+  const scope = findScopeElement(text, scopeId); if (!scope) { return ''; }
+  const initial = directChildOf(text, scope, 'initial'); if (!initial) { return ''; }
+  const transition = directChildOf(text, initial, 'transition');
+  return transition ? text.slice(transition.openEnd, transition.closeStart).trim() : '';
 }
 
 export function updateInitialTransitionActions(text: string, update: InitialTransitionActionsUpdate): string {
-  const xml = String(update.xml ?? '').trim();
-  validateExecutableFragment(xml);
-  const region = getInitialTransitionScope(text, update.scopeId);
-  if (!region) { throw new Error(update.scopeId ? `State ${update.scopeId} was not found.` : 'The SCXML root element was not found.'); }
-  const initial = /<initial\b[^>]*>([\s\S]*?)<\/initial\s*>/i.exec(region.body);
+  const xml = String(update.xml ?? '').trim(); validateExecutableFragment(xml);
+  const scope = findScopeElement(text, update.scopeId);
+  if (!scope) { throw new Error(update.scopeId ? `State ${update.scopeId} was not found.` : 'The SCXML root element was not found.'); }
+  const initial = directChildOf(text, scope, 'initial');
   if (!initial) { throw new Error('Create an explicit initial transition before editing its executable actions.'); }
-  const transition = /<transition\b[^>]*?(?:\/>|>[\s\S]*?<\/transition\s*>)/i.exec(initial[1]);
+  const transition = directChildOf(text, initial, 'transition');
   if (!transition) { throw new Error('The explicit initial transition was not found.'); }
-  const absoluteStart = region.bodyStart + initial.index + initial[0].indexOf(initial[1]) + transition.index;
-  const original = transition[0];
-  const openTag = /^<transition\b[^>]*>/i.exec(original)?.[0];
-  if (!openTag) { throw new Error('The explicit initial transition opening element was not found.'); }
+  const openTag = text.slice(transition.start, transition.openEnd);
   if (!xml) {
     const emptyTag = openTag.replace(/\/\s*>$/, '>').replace(/>$/, '/>');
-    return text.slice(0, absoluteStart) + emptyTag + text.slice(absoluteStart + original.length);
+    return replaceRange(text, transition.start, transition.end, emptyTag);
   }
-  const lineStart = text.lastIndexOf('\n', absoluteStart) + 1;
-  const indent = text.slice(lineStart, absoluteStart).match(/^[ \t]*/)?.[0] ?? '';
-  const normalizedOpen = openTag.replace(/\/\s*>$/, '>');
-  const replacement = `${normalizedOpen}\n${indentFragment(xml, indent + '  ')}\n${indent}</transition>`;
-  return text.slice(0, absoluteStart) + replacement + text.slice(absoluteStart + original.length);
+  const indent = indentationAt(text, transition.start), normalizedOpen = openTag.replace(/\/\s*>$/, '>');
+  return replaceRange(text, transition.start, transition.end, `${normalizedOpen}\n${indentFragment(xml, indent + '  ')}\n${indent}</${transition.name}>`);
 }
-
-function getInitialTransitionScope(text: string, scopeId?: string): { bodyStart: number; body: string } | undefined {
-  if (scopeId) {
-    const state = findState(text, scopeId);
-    if (!state) { return undefined; }
-    const closeLength = state.end > state.openEnd ? (`</${state.kind}>`).length : 0;
-    const bodyEnd = state.end - closeLength;
-    return { bodyStart: state.openEnd, body: text.slice(state.openEnd, bodyEnd) };
-  }
-  const root = /<scxml\b[^>]*>/i.exec(text);
-  const closeStart = text.lastIndexOf('</scxml>');
-  if (!root || closeStart < 0) { return undefined; }
-  const bodyStart = root.index + root[0].length;
-  return { bodyStart, body: text.slice(bodyStart, closeStart) };
-}
-
-
 export interface InlineInvokeContentUpdate { stateId: string; invokeIndex: number; scxml: string; }
 
 export function updateInlineInvokeContent(text: string, update: InlineInvokeContentUpdate): string {
-  const state = findState(text, update.stateId);
+  const state = findElementById(parseXmlSource(text), new Set(['state', 'parallel']), update.stateId);
   if (!state) { throw new Error(`State ${update.stateId} was not found.`); }
-  const close = state.end > state.openEnd ? `</${state.kind}>` : '';
-  const bodyEnd = state.end - close.length;
-  const body = text.slice(state.openEnd, bodyEnd);
-  const invokes = findDirectInvokeElements(body);
-  const invoke = invokes[update.invokeIndex];
+  const invoke = directChildren(state, 'invoke')[update.invokeIndex];
   if (!invoke) { throw new Error(`Invoke ${update.invokeIndex + 1} was not found in state ${update.stateId}.`); }
   const scxml = String(update.scxml ?? '').trim();
-  if (!scxml || !/^<scxml\b[\s\S]*<\/scxml\s*>$/i.test(scxml)) { throw new Error('Inline invoke content must be a complete scxml element.'); }
-  const invokeXml = invoke.xml;
-  const content = /<content\b[^>]*>([\s\S]*?)<\/content\s*>/i.exec(invokeXml);
+  const replacementRoot = findRootElement(scxml);
+  if (!replacementRoot || replacementRoot.start !== 0 || replacementRoot.end !== scxml.length) { throw new Error('Inline invoke content must be one complete scxml element.'); }
+  const content = directChildOf(text, invoke, 'content');
   if (!content) { throw new Error('The selected invoke does not contain inline content.'); }
-  const existingScxml = /<scxml\b[\s\S]*<\/scxml\s*>/i.exec(content[1]);
-  if (!existingScxml) { throw new Error('The selected invoke content does not contain inline SCXML.'); }
-  const contentStart = content.index + content[0].indexOf(content[1]);
-  const localStart = contentStart + existingScxml.index;
-  const changedInvoke = invokeXml.slice(0, localStart) + scxml + invokeXml.slice(localStart + existingScxml[0].length);
-  const absoluteStart = state.openEnd + invoke.start;
-  return text.slice(0, absoluteStart) + changedInvoke + text.slice(absoluteStart + invoke.xml.length);
+  const nested = directChildren(content).find(child => child.localName === 'scxml');
+  if (!nested) { throw new Error('The selected invoke content does not contain inline SCXML.'); }
+  return replaceRange(text, nested.start, nested.end, scxml);
 }
-
-
 export interface StructuredSendAction {
   eventMode: 'literal' | 'expression'; event: string;
   targetMode: 'none' | 'literal' | 'expression'; target?: string;

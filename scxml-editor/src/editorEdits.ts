@@ -1026,3 +1026,37 @@ export function updateInlineInvokeContent(text: string, update: InlineInvokeCont
   const absoluteStart = state.openEnd + invoke.start;
   return text.slice(0, absoluteStart) + changedInvoke + text.slice(absoluteStart + invoke.xml.length);
 }
+
+
+export interface StructuredSendAction {
+  eventMode: 'literal' | 'expression'; event: string;
+  targetMode: 'none' | 'literal' | 'expression'; target?: string;
+  typeMode: 'none' | 'literal' | 'expression'; type?: string;
+  idMode: 'none' | 'literal' | 'location'; id?: string;
+  delayMode: 'none' | 'literal' | 'expression'; delay?: string;
+  namelist?: string;
+}
+
+export function createStructuredSendXml(action: StructuredSendAction): string {
+  const event = String(action.event ?? '').trim();
+  if (!event) { throw new Error('Send event or event expression is required.'); }
+  if (action.eventMode === 'literal') {
+    if (/\s/.test(event) || event === '*' || event.endsWith('.*') || !/^[A-Za-z_][\w.-]*$/.test(event)) {
+      throw new Error('A literal send event must be one concrete event name.');
+    }
+  }
+  let tag = '<send/>';
+  tag = setAttribute(tag, action.eventMode === 'expression' ? 'eventexpr' : 'event', event);
+  const applyChoice = (mode: string, value: string | undefined, literal: string, expression: string): void => {
+    const normalized = String(value ?? '').trim();
+    if (mode !== 'none' && !normalized) { throw new Error(`Send ${literal} value is required for the selected mode.`); }
+    if (mode === 'literal') { tag = setAttribute(tag, literal, normalized); }
+    else if (mode === 'expression' || mode === 'location') { tag = setAttribute(tag, expression, normalized); }
+  };
+  applyChoice(action.targetMode, action.target, 'target', 'targetexpr');
+  applyChoice(action.typeMode, action.type, 'type', 'typeexpr');
+  applyChoice(action.idMode, action.id, 'id', 'idlocation');
+  applyChoice(action.delayMode, action.delay, 'delay', 'delayexpr');
+  tag = setAttribute(tag, 'namelist', String(action.namelist ?? '').trim().replace(/\s+/g, ' '));
+  return tag;
+}

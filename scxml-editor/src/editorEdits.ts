@@ -833,3 +833,26 @@ export function createStructuredInvokeXml(action: StructuredInvokeAction): strin
   const finalize=String(action.finalize??'').trim();if(finalize){validateExecutableFragment(finalize);children.push(`<finalize>\n${indentFragment(finalize,'  ')}\n</finalize>`);}
   return children.length?`${tag.replace(/\/\s*>$/,'>')}\n${indentFragment(children.join('\n'),'  ')}\n</invoke>`:tag;
 }
+
+export interface ExecutableActionItem { xml: string; }
+export function readStructuredExecutableContent(text:string,stateId:string,location:ExecutableContentLocation,transitionIndex=0):ExecutableActionItem[]{
+  const state=findElementById(parseXmlSource(text),new Set(['state','parallel','final','history']),stateId);if(!state)throw new Error(`State ${stateId} was not found.`);
+  const owner=location==='transition'?directChildren(state,'transition')[transitionIndex]:directChildren(state,location)[0];if(!owner)return [];
+  return directChildren(owner).map(child=>({xml:text.slice(child.start,child.end)}));
+}
+export function serializeStructuredExecutableContent(items:ExecutableActionItem[]):string{
+  const xml=(items??[]).map(item=>String(item?.xml??'').trim()).filter(Boolean).join('\n');validateExecutableFragment(xml);return xml;
+}
+export function updateStructuredExecutableContent(text:string,update:Omit<ExecutableContentUpdate,'xml'>&{items:ExecutableActionItem[]}):string{
+  return updateExecutableContent(text,{...update,xml:serializeStructuredExecutableContent(update.items)});
+}
+export function moveStructuredExecutableAction(text:string,update:{stateId:string;location:ExecutableContentLocation;transitionIndex?:number;index:number;direction:-1|1}):string{
+  const items=readStructuredExecutableContent(text,update.stateId,update.location,update.transitionIndex??0);const target=update.index+update.direction;
+  if(update.index<0||update.index>=items.length||target<0||target>=items.length)throw new Error('Executable action cannot be moved beyond the action list.');
+  [items[update.index],items[target]]=[items[target],items[update.index]];
+  return updateStructuredExecutableContent(text,{stateId:update.stateId,location:update.location,transitionIndex:update.transitionIndex,items});
+}
+export function deleteStructuredExecutableAction(text:string,update:{stateId:string;location:ExecutableContentLocation;transitionIndex?:number;index:number}):string{
+  const items=readStructuredExecutableContent(text,update.stateId,update.location,update.transitionIndex??0);if(update.index<0||update.index>=items.length)throw new Error('Executable action was not found.');items.splice(update.index,1);
+  return updateStructuredExecutableContent(text,{stateId:update.stateId,location:update.location,transitionIndex:update.transitionIndex,items});
+}

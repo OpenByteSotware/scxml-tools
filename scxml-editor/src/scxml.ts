@@ -165,12 +165,14 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
   };
   const ids = new Map<string, XmlSourceElement>();
   const invokeIds = new Map<string, XmlSourceElement>();
+  // SCXML uses interleaved content models for scxml, state, and parallel.
+  // Their legal direct children are checked by CHILDREN and cardinality rules,
+  // but those children are not required to appear in one fixed sequence.
   const order: Record<string,string[][]> = {
-    scxml:[['datamodel'],['script'],['initial'],['state','parallel','final']],
-    state:[['onentry'],['onexit'],['transition'],['initial'],['state','parallel','final','history'],['datamodel'],['invoke']],
-    parallel:[['onentry'],['onexit'],['transition'],['state','parallel','final','history'],['datamodel'],['invoke']],
-    final:[['onentry'],['onexit'],['donedata']], invoke:[['param'],['content'],['finalize']],
-    send:[['param'],['content']], donedata:[['param'],['content']]
+    final:[['onentry'],['onexit'],['donedata']],
+    invoke:[['param'],['content'],['finalize']],
+    send:[['param'],['content']],
+    donedata:[['param'],['content']]
   };
   const pair = (element: XmlSourceElement, literal: string, expression: string): void => {
     if (getAttribute(element,literal) && getAttribute(element,expression)) add(`<${element.localName}> cannot define both ${literal} and ${expression}.`,element,'schema.exclusiveAttribute',literal);

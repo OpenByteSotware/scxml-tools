@@ -18,9 +18,9 @@ suite('SCXML-root transition domain regression', () => {
 
   test('simulator exits the old top-level state before entering its sibling', () => {
     const simulator = new ScxmlSimulator(siblingChart);
-    assert.deepStrictEqual(simulator.initialize().active, ['a']);
-    assert.deepStrictEqual(simulator.dispatch('t').active, ['b']);
-    assert.deepStrictEqual(simulator.dispatch('s').active, ['c']);
+    assert.deepStrictEqual(simulator.initialize().snapshot.active, ['a']);
+    assert.deepStrictEqual(simulator.dispatch('t').snapshot.active, ['b']);
+    assert.deepStrictEqual(simulator.dispatch('s').snapshot.active, ['c']);
   });
 
   test('retains compound-source internal descendant domains', () => {

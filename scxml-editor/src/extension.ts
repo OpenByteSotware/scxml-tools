@@ -79,7 +79,7 @@ class StateChartEditorProvider implements vscode.CustomTextEditorProvider {
     let selectedTransition: number | undefined;
     let revealRequest: { stateId: string; transitionIndex?: number } | undefined;
     const inlineInvokeDocuments = new Map<string, { uri: vscode.Uri; stateId: string; invokeIndex: number }>();
-    let simulator: ScxmlSimulator | undefined;
+    let simulator: ScxmlSimulator | undefined; const simulatorTimers=new Map<string,NodeJS.Timeout>(); const clearSimulatorTimers=():void=>{for(const timer of simulatorTimers.values())clearTimeout(timer);simulatorTimers.clear();};
     const update = () => {
       const parentUri = this.invokeParents.get(document.uri.toString());
       const inlineChild = [...inlineInvokeDocuments.values()].find(item => item.uri.toString() === document.uri.toString());
@@ -92,6 +92,8 @@ class StateChartEditorProvider implements vscode.CustomTextEditorProvider {
       if (event.document.uri.toString() === document.uri.toString()) { update(); }
     });
     panel.onDidDispose(() => change.dispose());
+    const processSimulationResult=(result:ReturnType<ScxmlSimulator['initialize']>):void=>{void panel.webview.postMessage({command:'simulationState',snapshot:result.snapshot});for(const effect of result.effects){if(effect.kind==='cancel'){const timer=simulatorTimers.get(effect.id);if(timer)clearTimeout(timer);simulatorTimers.delete(effect.id);simulator?.recordCancellation(effect.id);continue;}const deliver=():void=>{simulatorTimers.delete(effect.id);simulator?.acknowledgeScheduled(effect.id);if(simulator)processSimulationResult(simulator.dispatch(effect.event,'scheduled'));};if(effect.delayMs<=0)queueMicrotask(deliver);else simulatorTimers.set(effect.id,setTimeout(deliver,effect.delayMs));}};
+    panel.onDidDispose(()=>clearSimulatorTimers());
     panel.webview.onDidReceiveMessage(async message => {
       try {
       if (!message || typeof message.command !== 'string') { throw new Error('The editor received an invalid webview message.'); }
@@ -99,9 +101,9 @@ class StateChartEditorProvider implements vscode.CustomTextEditorProvider {
       if (message.command === 'buildStructuredSend') { const xml=createStructuredSendXml(message.action); void panel.webview.postMessage({command:'structuredSendReady',xml,targetId:String(message.targetId||'')}); return; }
       if (message.command === 'buildStructuredCancel') { const xml=createStructuredCancelXml(message.action); void panel.webview.postMessage({command:'structuredCancelReady',xml,targetId:String(message.targetId||'')}); return; }
         if (message.command === 'buildStructuredInvoke') { const xml=createStructuredInvokeXml(message.action); void panel.webview.postMessage({command:'structuredInvokeReady',xml,targetId:String(message.targetId||'')}); return; }
-      if (message.command === 'startSimulation') { simulator=new ScxmlSimulator(document.getText()); void panel.webview.postMessage({command:'simulationState',snapshot:simulator.initialize()}); return;
-      } else if (message.command === 'simulationEvent') { if(!simulator)simulator=new ScxmlSimulator(document.getText()); void panel.webview.postMessage({command:'simulationState',snapshot:simulator.dispatch(String(message.event||''))}); return;
-      } else if (message.command === 'resetSimulation') { simulator=new ScxmlSimulator(document.getText()); void panel.webview.postMessage({command:'simulationState',snapshot:simulator.initialize()}); return;
+      if (message.command === 'startSimulation') { clearSimulatorTimers(); simulator=new ScxmlSimulator(document.getText()); processSimulationResult(simulator.initialize()); return;
+      } else if (message.command === 'simulationEvent') { if(!simulator)simulator=new ScxmlSimulator(document.getText()); processSimulationResult(simulator.dispatch(String(message.event||''))); return;
+      } else if (message.command === 'resetSimulation') { clearSimulatorTimers(); simulator=new ScxmlSimulator(document.getText()); processSimulationResult(simulator.initialize()); return;
       } else if (message.command === 'showSource') {
         await vscode.window.showTextDocument(document, { preview: false });
       } else if (message.command === 'revealProblem') {

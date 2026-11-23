@@ -1,0 +1,8 @@
+import * as assert from 'assert';import { validateScxmlSource } from '../scxml';
+const wrap=(body:string,dm:string)=>`<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="${dm}" initial="a"><state id="a">${body}</state></scxml>`;
+suite('Stage 29 XPath and custom profiles',()=>{
+ test('accepts representative XPath and rejects malformed expressions and locations',()=>{let p=validateScxmlSource(wrap(`<datamodel><data id="x"><root/></data></datamodel><transition cond="count(/root/item[@ready='true']) &gt; 0" target="a"/>`,'xpath'));assert.ok(!p.some(x=>x.code.startsWith('datamodel.xpath.')));p=validateScxmlSource(wrap(`<onentry><assign location="count(/root/item)" expr="/root/item["/></onentry>`,'xpath'));assert.ok(p.some(x=>x.code==='datamodel.xpath.expression'));assert.ok(p.some(x=>x.code==='datamodel.xpath.location'));});
+ test('rejects script in XPath',()=>assert.ok(validateScxmlSource(wrap(`<onentry><script>bad()</script></onentry>`,'xpath')).some(x=>x.code==='datamodel.xpath.script')));
+ test('uses configured custom language and feature restrictions',()=>{const profiles={vendor:{expressionLanguage:'ecmascript' as const,allowScript:false,allowAssign:false}};const p=validateScxmlSource(wrap(`<onentry><assign location="x" expr="("/><script>run()</script></onentry>`,'vendor'),profiles);assert.ok(p.some(x=>x.code==='datamodel.ecmascript.expression'));assert.ok(p.some(x=>x.code==='datamodel.profile.assign'));assert.ok(p.some(x=>x.code==='datamodel.profile.script'));assert.ok(!p.some(x=>x.code==='datamodel.custom.unconfigured'));});
+ test('warns only for unconfigured custom profiles',()=>assert.ok(validateScxmlSource(wrap('', 'vendor')).some(x=>x.code==='datamodel.custom.unconfigured'&&x.severity==='warning')));
+});

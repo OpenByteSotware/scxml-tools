@@ -1,6 +1,6 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import { getAttribute, parseXmlSource, XmlSourceElement } from './xmlSource';
-import { validateDataModelExpressions } from './expressionValidation';
+import { CustomDataModelProfiles, validateDataModelExpressions } from './expressionValidation';
 
 export type StateKind = 'state' | 'parallel' | 'final' | 'history';
 export type ScxmlProblemSeverity = 'error' | 'warning';
@@ -251,13 +251,13 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
   }
 }
 
-export function validateScxmlSource(text:string):ScxmlProblem[]{
+export function validateScxmlSource(text:string,profiles:CustomDataModelProfiles={}):ScxmlProblem[]{
  const source=parseXmlSource(text);
  if(source.problems.length)return source.problems.map(item=>problem(item.message,item.start,item.end,item.code));
  const valid=XMLValidator.validate(text);if(valid!==true){const at=lineColumnToOffset(text,valid.err.line,valid.err.col);return[problem(`XML: ${valid.err.msg}`,at,at+1,'xml.syntax')];}
  const roots=source.roots.filter(item=>item.localName==='scxml');
  if(roots.length!==1)return[problem('The document must contain exactly one scxml root element.',0,Math.max(1,text.length),'schema.root')];
- const out:ScxmlProblem[]=[];validateScxmlTree(text,roots[0],out);out.push(...validateDataModelExpressions(text).map(item=>problem(item.message,item.start,item.end,item.code,item.severity)));return out;
+ const out:ScxmlProblem[]=[];validateScxmlTree(text,roots[0],out);out.push(...validateDataModelExpressions(text,profiles).map(item=>problem(item.message,item.start,item.end,item.code,item.severity)));return out;
 }
 function validateReachability(states: StateNode[], rootInitial: string | undefined, errors: string[]): void {
   const all = new Map<string, StateNode>();
@@ -292,8 +292,8 @@ function validateReachability(states: StateNode[], rootInitial: string | undefin
 }
 
 
-export function parseScxml(text: string): ScxmlModel {
-  const sourceProblems = validateScxmlSource(text);
+export function parseScxml(text: string, profiles: CustomDataModelProfiles = {}): ScxmlModel {
+  const sourceProblems = validateScxmlSource(text, profiles);
   const errors: string[] = sourceProblems.map(item => item.message);
   const valid = XMLValidator.validate(text);
   if (valid !== true) {

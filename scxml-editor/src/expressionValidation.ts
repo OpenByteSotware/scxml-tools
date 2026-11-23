@@ -1,112 +1,42 @@
 import * as acorn from 'acorn';
 import { getAttribute, parseXmlSource, XmlSourceAttribute, XmlSourceElement } from './xmlSource';
-
-export type DataModelProfile = 'null' | 'ecmascript' | 'xpath' | 'custom';
-export interface ExpressionProblem { message: string; start: number; end: number; code: string; severity: 'error' | 'warning'; }
-
-const expressionAttributes = new Set(['cond','expr','array','eventexpr','targetexpr','typeexpr','delayexpr','srcexpr']);
-const locationAttributes = new Set(['location','idlocation','sendidexpr']);
-const nullForbiddenElements = new Set(['datamodel','data','assign','foreach','script']);
-
-function decodeXml(value: string): string {
-  return value.replace(/&(?:lt|gt|amp|quot|apos|#\d+|#x[\da-fA-F]+);/g, entity => {
-    if (entity === '&lt;') return '<'; if (entity === '&gt;') return '>'; if (entity === '&amp;') return '&';
-    if (entity === '&quot;') return '"'; if (entity === '&apos;') return "'";
-    const hex = entity.startsWith('&#x'); const number = Number.parseInt(entity.slice(hex ? 3 : 2, -1), hex ? 16 : 10);
-    return Number.isFinite(number) ? String.fromCodePoint(number) : entity;
-  });
-}
-function attrProblem(attribute: XmlSourceAttribute, message: string, code: string, severity: 'error'|'warning'='error'): ExpressionProblem {
-  return { message, start: attribute.valueStart, end: Math.max(attribute.valueStart + 1, attribute.valueEnd), code, severity };
-}
-function elementProblem(element: XmlSourceElement, message: string, code: string, severity: 'error'|'warning'='error'): ExpressionProblem {
-  return { message, start: element.start, end: element.openEnd, code, severity };
-}
-function nearestScxml(element: XmlSourceElement): XmlSourceElement | undefined {
-  let current: XmlSourceElement | undefined = element;
-  while (current && current.localName !== 'scxml') current = current.parent;
-  return current;
-}
-function profileFor(root: XmlSourceElement): { profile: DataModelProfile; name: string } {
-  const raw = (getAttribute(root,'datamodel')?.value || 'null').trim().toLowerCase();
-  if (!raw || raw === 'null') return { profile:'null', name:'null' };
-  if (raw === 'ecmascript' || raw === 'javascript') return { profile:'ecmascript', name:raw };
-  if (raw === 'xpath') return { profile:'xpath', name:raw };
-  return { profile:'custom', name:raw };
-}
-function acornMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/\s*\(\d+:\d+\)\s*$/, '');
-}
-function parseExpression(value: string): unknown {
-  const source = decodeXml(value);
-  const node = acorn.parseExpressionAt(source,0,{ecmaVersion:2020});
-  if (source.slice((node as {end:number}).end).trim()) throw new SyntaxError('Unexpected text after expression');
-  return node;
-}
-function isAssignable(node: any): boolean {
-  if (!node) return false;
-  if (node.type === 'Identifier') return true;
-  if (node.type === 'MemberExpression') return !node.optional && isAssignable(node.object);
-  return false;
-}
-function validateEcmascriptAttribute(element: XmlSourceElement, attribute: XmlSourceAttribute, out: ExpressionProblem[]): void {
-  try {
-    const node = parseExpression(attribute.value);
-    if (locationAttributes.has(attribute.name) && !isAssignable(node)) {
-      out.push(attrProblem(attribute, `${element.localName}@${attribute.name} must be an assignable ECMAScript location.`, 'datamodel.ecmascript.location'));
-    }
-  } catch (error) {
-    out.push(attrProblem(attribute, `Invalid ECMAScript ${attribute.name}: ${acornMessage(error)}.`, locationAttributes.has(attribute.name) ? 'datamodel.ecmascript.location' : 'datamodel.ecmascript.expression'));
+export type DataModelProfile='null'|'ecmascript'|'xpath'|'custom';
+export interface CustomDataModelProfile { expressionLanguage:'none'|'ecmascript'|'xpath'; allowScript?:boolean; allowData?:boolean; allowAssign?:boolean; allowForeach?:boolean; }
+export type CustomDataModelProfiles=Record<string,CustomDataModelProfile>;
+export interface ExpressionProblem { message:string;start:number;end:number;code:string;severity:'error'|'warning'; }
+const expressionAttributes=new Set(['cond','expr','array','eventexpr','targetexpr','typeexpr','delayexpr','srcexpr']);
+const locationAttributes=new Set(['location','idlocation','sendidexpr']);
+const nullForbiddenElements=new Set(['datamodel','data','assign','foreach','script']);
+const xpathAxes=new Set(['ancestor','ancestor-or-self','attribute','child','descendant','descendant-or-self','following','following-sibling','namespace','parent','preceding','preceding-sibling','self']);
+function decodeXml(v:string):string{return v.replace(/&(?:lt|gt|amp|quot|apos|#\d+|#x[\da-fA-F]+);/g,e=>{if(e==='&lt;')return'<';if(e==='&gt;')return'>';if(e==='&amp;')return'&';if(e==='&quot;')return'"';if(e==='&apos;')return"'";const h=e.startsWith('&#x'),n=Number.parseInt(e.slice(h?3:2,-1),h?16:10);return Number.isFinite(n)?String.fromCodePoint(n):e;});}
+function ap(a:XmlSourceAttribute,m:string,c:string,s:'error'|'warning'='error'):ExpressionProblem{return{message:m,start:a.valueStart,end:Math.max(a.valueStart+1,a.valueEnd),code:c,severity:s};}
+function ep(e:XmlSourceElement,m:string,c:string,s:'error'|'warning'='error'):ExpressionProblem{return{message:m,start:e.start,end:e.openEnd,code:c,severity:s};}
+function nearest(e:XmlSourceElement):XmlSourceElement|undefined{let c:XmlSourceElement|undefined=e;while(c&&c.localName!=='scxml')c=c.parent;return c;}
+function details(root:XmlSourceElement):{profile:DataModelProfile;name:string}{const n=(getAttribute(root,'datamodel')?.value||'null').trim().toLowerCase();return !n||n==='null'?{profile:'null',name:'null'}:n==='ecmascript'||n==='javascript'?{profile:'ecmascript',name:n}:n==='xpath'?{profile:'xpath',name:n}:{profile:'custom',name:n};}
+function acornMessage(x:unknown):string{return(x instanceof Error?x.message:String(x)).replace(/\s*\(\d+:\d+\)\s*$/,'');}
+function parseJs(v:string):any{const src=decodeXml(v),n=acorn.parseExpressionAt(src,0,{ecmaVersion:2020});if(src.slice(n.end).trim())throw new SyntaxError('Unexpected text after expression');return n;}
+function assignable(n:any):boolean{return n?.type==='Identifier'||(n?.type==='MemberExpression'&&!n.optional&&assignable(n.object));}
+function jsAttribute(e:XmlSourceElement,a:XmlSourceAttribute,out:ExpressionProblem[]):void{try{const n=parseJs(a.value);if(locationAttributes.has(a.name)&&!assignable(n))out.push(ap(a,`${e.localName}@${a.name} must be an assignable ECMAScript location.`,'datamodel.ecmascript.location'));}catch(x){out.push(ap(a,`Invalid ECMAScript ${a.name}: ${acornMessage(x)}.`,locationAttributes.has(a.name)?'datamodel.ecmascript.location':'datamodel.ecmascript.expression'));}}
+function scriptText(text:string,e:XmlSourceElement):string{const raw=e.selfClosing?'':text.slice(e.openEnd,e.closeStart).trim(),m=/^<!\[CDATA\[([\s\S]*)\]\]>$/.exec(raw);return m?m[1]:decodeXml(raw);}
+function jsElement(text:string,e:XmlSourceElement,out:ExpressionProblem[],allowScript=true):void {
+  for(const a of e.attributes) if(expressionAttributes.has(a.name)||locationAttributes.has(a.name)) jsAttribute(e,a,out);
+  if(e.localName==='foreach') for(const n of ['item','index']) {
+    const a=getAttribute(e,n); if(!a) continue;
+    try { if(!assignable(parseJs(a.value))) out.push(ap(a,`foreach@${n} must be an assignable ECMAScript location.`,'datamodel.ecmascript.location')); }
+    catch(x) { out.push(ap(a,`Invalid ECMAScript ${n}: ${acornMessage(x)}.`,'datamodel.ecmascript.location')); }
   }
-}
-function scriptText(text: string, element: XmlSourceElement): string {
-  if (element.selfClosing) return '';
-  const raw = text.slice(element.openEnd, element.closeStart).trim();
-  const cdata = /^<!\[CDATA\[([\s\S]*)\]\]>$/.exec(raw);
-  return cdata ? cdata[1] : decodeXml(raw);
-}
-function validateEcmascriptElement(text: string, element: XmlSourceElement, out: ExpressionProblem[]): void {
-  for (const attribute of element.attributes) {
-    if (expressionAttributes.has(attribute.name) || locationAttributes.has(attribute.name)) validateEcmascriptAttribute(element,attribute,out);
-  }
-  if (element.localName === 'foreach') {
-    for (const name of ['item','index']) {
-      const attribute = getAttribute(element,name); if (!attribute) continue;
-      try { if (!isAssignable(parseExpression(attribute.value))) out.push(attrProblem(attribute, `foreach@${name} must be an assignable ECMAScript location.`, 'datamodel.ecmascript.location')); }
-      catch (error) { out.push(attrProblem(attribute, `Invalid ECMAScript ${name}: ${acornMessage(error)}.`, 'datamodel.ecmascript.location')); }
+  if(e.localName==='script') {
+    if(!allowScript) { out.push(ep(e,'Scripts are disabled by this data-model profile.','datamodel.profile.script')); return; }
+    if(!getAttribute(e,'src')) {
+      const src=scriptText(text,e);
+      if(src) { try { acorn.parse(src,{ecmaVersion:2020,allowReturnOutsideFunction:true}); } catch(x) { out.push(ep(e,`Invalid ECMAScript script: ${acornMessage(x)}.`,'datamodel.ecmascript.script')); } }
     }
   }
-  if (element.localName === 'script' && !getAttribute(element,'src')) {
-    const source = scriptText(text,element);
-    if (source) try { acorn.parse(source,{ecmaVersion:2020,allowReturnOutsideFunction:true}); }
-    catch (error) { out.push(elementProblem(element, `Invalid ECMAScript script: ${acornMessage(error)}.`, 'datamodel.ecmascript.script')); }
-  }
 }
-function tokenizeNullCondition(value: string): string[] | undefined {
-  const tokens: string[]=[]; let rest=decodeXml(value).trim();
-  const pattern=/^(?:\s+|In\s*\(\s*(?:'[^']+'|"[^"]+")\s*\)|true\b|false\b|&&|\|\||!|\(|\))/;
-  while(rest){const match=pattern.exec(rest);if(!match)return undefined;if(!/^\s+$/.test(match[0]))tokens.push(match[0]);rest=rest.slice(match[0].length);}
-  return tokens;
-}
-function validateNullCondition(attribute: XmlSourceAttribute, stateIds: Set<string>, out: ExpressionProblem[]): void {
-  const tokens=tokenizeNullCondition(attribute.value);
-  if(!tokens?.length){out.push(attrProblem(attribute,'The null data model permits only boolean operators, true/false, and In("stateId") in conditions.','datamodel.null.condition'));return;}
-  for(const token of tokens){const match=/^In\s*\(\s*(['"])([^'"]+)\1\s*\)$/.exec(token);if(match&&!stateIds.has(match[2]))out.push(attrProblem(attribute,`In() references missing state ${match[2]}.`,'datamodel.null.stateReference'));}
-}
-function validateNullElement(element: XmlSourceElement, stateIds: Set<string>, out: ExpressionProblem[]): void {
-  if (nullForbiddenElements.has(element.localName)) out.push(elementProblem(element, `<${element.localName}> is not available with the null data model.`, 'datamodel.null.unsupportedElement'));
-  for (const attribute of element.attributes) {
-    if (attribute.name === 'cond') validateNullCondition(attribute,stateIds,out);
-    else if (expressionAttributes.has(attribute.name) || locationAttributes.has(attribute.name)) out.push(attrProblem(attribute, `${element.localName}@${attribute.name} is not available with the null data model.`, 'datamodel.null.unsupportedExpression'));
-  }
-}
-export function validateDataModelExpressions(text: string): ExpressionProblem[] {
-  const document=parseXmlSource(text); if(document.problems.length)return [];
-  const out:ExpressionProblem[]=[];
-  const stateIds=new Set(document.elements.filter(item=>['state','parallel','final','history'].includes(item.localName)).map(item=>getAttribute(item,'id')?.value).filter((value):value is string=>Boolean(value)));
-  const roots=document.elements.filter(item=>item.localName==='scxml');
-  for(const root of roots){const details=profileFor(root);if(details.profile==='xpath')out.push(elementProblem(root,'XPath data-model expressions are recognized but deep XPath syntax validation is not available yet.','datamodel.xpath.unvalidated','warning'));else if(details.profile==='custom')out.push(elementProblem(root,`Data model ${details.name} is processor-defined; expression syntax cannot be validated by the editor.`,'datamodel.custom.unvalidated','warning'));}
-  for(const element of document.elements){const root=nearestScxml(element);if(!root)continue;const {profile}=profileFor(root);if(profile==='null')validateNullElement(element,stateIds,out);else if(profile==='ecmascript')validateEcmascriptElement(text,element,out);}
-  return out;
-}
+function xpathSyntax(value:string):string|undefined{const src=decodeXml(value).trim();if(!src)return'Expression is empty';let quote='',round=0,square=0;for(let i=0;i<src.length;i++){const c=src[i];if(quote){if(c===quote)quote='';continue;}if(c==='"'||c==="'"){quote=c;continue;}if(c==='(')round++;else if(c===')'&&--round<0)return'Unexpected )';else if(c==='[')square++;else if(c===']'&&--square<0)return'Unexpected ]';}if(quote)return'Unterminated string literal';if(round)return'Unbalanced parentheses';if(square)return'Unbalanced predicates';if(/(?:\/|::|@|\$|\(|\[|\||\+|-|\*|=|!=|<=|>=|<|>)\s*$/.test(src))return'Expression ends with an incomplete operator or path step';for(const m of src.matchAll(/\b([A-Za-z-]+)::/g))if(!xpathAxes.has(m[1]))return`Unknown XPath axis ${m[1]}`;return undefined;}
+function xpathLocation(value:string):string|undefined{const syntax=xpathSyntax(value);if(syntax)return syntax;const src=decodeXml(value).trim();if(/^(?:\$?[A-Za-z_][\w.-]*|(?:\$?[A-Za-z_][\w.-]*)?(?:\/(?:[A-Za-z_][\w.-]*(?::[A-Za-z_][\w.-]*)?|\*|@(?:[A-Za-z_][\w.-]*(?::[A-Za-z_][\w.-]*)?|\*))(?:\[.+\])?)+)$/.test(src))return undefined;return'Location must select a variable, element, or attribute node without boolean/arithmetic operators';}
+function xpathElement(e:XmlSourceElement,out:ExpressionProblem[]):void{for(const a of e.attributes){if(expressionAttributes.has(a.name)||locationAttributes.has(a.name)){const issue=locationAttributes.has(a.name)?xpathLocation(a.value):xpathSyntax(a.value);if(issue)out.push(ap(a,`Invalid XPath ${a.name}: ${issue}.`,locationAttributes.has(a.name)?'datamodel.xpath.location':'datamodel.xpath.expression'));}}const check=e.localName==='foreach'?['item','index']:[];for(const name of check){const a=getAttribute(e,name);if(a){const issue=xpathLocation(a.value);if(issue)out.push(ap(a,`Invalid XPath ${name}: ${issue}.`,'datamodel.xpath.location'));}}if(e.localName==='script')out.push(ep(e,'The XPath data model does not define inline script execution.','datamodel.xpath.script'));}
+function nullTokens(v:string):string[]|undefined{const t:string[]=[];let r=decodeXml(v).trim(),p=/^(?:\s+|In\s*\(\s*(?:'[^']+'|"[^"]+")\s*\)|true\b|false\b|&&|\|\||!|\(|\))/;while(r){const m=p.exec(r);if(!m)return undefined;if(!/^\s+$/.test(m[0]))t.push(m[0]);r=r.slice(m[0].length);}return t;}
+function nullElement(e:XmlSourceElement,ids:Set<string>,out:ExpressionProblem[]):void{if(nullForbiddenElements.has(e.localName))out.push(ep(e,`<${e.localName}> is not available with the null data model.`,'datamodel.null.unsupportedElement'));for(const a of e.attributes)if(a.name==='cond'){const ts=nullTokens(a.value);if(!ts?.length)out.push(ap(a,'The null data model permits only boolean operators, true/false, and In("stateId") in conditions.','datamodel.null.condition'));else for(const t of ts){const m=/^In\s*\(\s*(['"])([^'"]+)\1\s*\)$/.exec(t);if(m&&!ids.has(m[2]))out.push(ap(a,`In() references missing state ${m[2]}.`,'datamodel.null.stateReference'));}}else if(expressionAttributes.has(a.name)||locationAttributes.has(a.name))out.push(ap(a,`${e.localName}@${a.name} is not available with the null data model.`,'datamodel.null.unsupportedExpression'));}
+function profileRestrictions(e:XmlSourceElement,p:CustomDataModelProfile,out:ExpressionProblem[]):void{if(e.localName==='data'&&p.allowData===false)out.push(ep(e,'Data declarations are disabled by this data-model profile.','datamodel.profile.data'));if(e.localName==='assign'&&p.allowAssign===false)out.push(ep(e,'Assignments are disabled by this data-model profile.','datamodel.profile.assign'));if(e.localName==='foreach'&&p.allowForeach===false)out.push(ep(e,'Foreach is disabled by this data-model profile.','datamodel.profile.foreach'));}
+export function validateDataModelExpressions(text:string,profiles:CustomDataModelProfiles={}):ExpressionProblem[]{const d=parseXmlSource(text);if(d.problems.length)return[];const out:ExpressionProblem[]=[],ids=new Set(d.elements.filter(x=>['state','parallel','final','history'].includes(x.localName)).map(x=>getAttribute(x,'id')?.value).filter((x):x is string=>Boolean(x)));for(const root of d.elements.filter(x=>x.localName==='scxml')){const q=details(root);if(q.profile==='custom'&&!profiles[q.name])out.push(ep(root,`Data model ${q.name} is processor-defined and has no configured validation profile.`,'datamodel.custom.unconfigured','warning'));}for(const e of d.elements){const root=nearest(e);if(!root)continue;const q=details(root);if(q.profile==='null')nullElement(e,ids,out);else if(q.profile==='ecmascript')jsElement(text,e,out);else if(q.profile==='xpath')xpathElement(e,out);else{const p=profiles[q.name];if(!p)continue;profileRestrictions(e,p,out);if(p.expressionLanguage==='ecmascript')jsElement(text,e,out,p.allowScript===true);else if(p.expressionLanguage==='xpath')xpathElement(e,out);else if([...e.attributes].some(a=>expressionAttributes.has(a.name)||locationAttributes.has(a.name)))out.push(ep(e,`Expressions are disabled by data-model profile ${q.name}.`,'datamodel.profile.expression'));}}return out;}

@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import { parseScxml, ScxmlModel, StateNode } from './scxml';
+import { CustomDataModelProfiles } from './expressionValidation';
 import { createChildState, createHistoryState, createStructuredCancelXml, createStructuredInvokeXml, createStructuredSendXml, createParallelRegion, createState, createTransition, deleteState, deleteTransition, readDataModel, readDoneData, readExecutableContent, readInitialTransitionActions, readInvokeNavigationTargets, readInvokes, readStructuredExecutableContent, reparentState, updateDataModel, updateDoneData, updateExecutableContent, updateStructuredExecutableContent, moveStructuredExecutableAction, deleteStructuredExecutableAction, updateExplicitInitial, updateHistoryState, updateInitialTransitionActions, updateInlineInvokeContent, updateInvokes, updateRootProperties, updateState, updateTransition } from './editorEdits';
 
 const diagnostics = vscode.languages.createDiagnosticCollection('scxml');
+function configuredDataModelProfiles(): CustomDataModelProfiles { return vscode.workspace.getConfiguration('scxml').get<CustomDataModelProfiles>('dataModelProfiles', {}); }
 type Point = { x: number; y: number };
 type Layout = Record<string, Point>;
 
@@ -19,7 +21,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('scxml.newFile', createScxmlFile),
     vscode.workspace.onDidOpenTextDocument(validateDocument),
     vscode.workspace.onDidChangeTextDocument(event => validateDocument(event.document)),
-    vscode.workspace.onDidCloseTextDocument(document => diagnostics.delete(document.uri))
+    vscode.workspace.onDidCloseTextDocument(document => diagnostics.delete(document.uri)),
+    vscode.workspace.onDidChangeConfiguration(event => { if (event.affectsConfiguration('scxml.dataModelProfiles')) vscode.workspace.textDocuments.forEach(validateDocument); })
   );
   vscode.workspace.textDocuments.forEach(validateDocument);
 }
@@ -49,7 +52,7 @@ async function createScxmlFile(): Promise<void> {
 function validateDocument(document: vscode.TextDocument): void {
   if (document.languageId !== 'scxml' && !document.fileName.endsWith('.scxml')) { return; }
   try {
-    const model = parseScxml(document.getText());
+    const model = parseScxml(document.getText(), configuredDataModelProfiles());
     diagnostics.set(document.uri, model.problems.map(item => {
       const diagnostic = new vscode.Diagnostic(new vscode.Range(document.positionAt(item.startOffset), document.positionAt(item.endOffset)), item.message, item.severity === 'warning' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error);
       diagnostic.code = item.code; diagnostic.source = 'SCXML'; return diagnostic;
@@ -78,7 +81,7 @@ class StateChartEditorProvider implements vscode.CustomTextEditorProvider {
     const update = () => {
       const parentUri = this.invokeParents.get(document.uri.toString());
       const inlineChild = [...inlineInvokeDocuments.values()].find(item => item.uri.toString() === document.uri.toString());
-      panel.webview.html = renderPage(parseScxml(document.getText()), document.getText(), document.fileName, layout, selectedId, selectedTransition, parentUri, inlineChild ? document.uri : undefined, revealRequest);
+      panel.webview.html = renderPage(parseScxml(document.getText(), configuredDataModelProfiles()), document.getText(), document.fileName, layout, selectedId, selectedTransition, parentUri, inlineChild ? document.uri : undefined, revealRequest);
       revealRequest = undefined;
     };
     update();

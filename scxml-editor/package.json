@@ -77,7 +77,49 @@
         ],
         "priority": "default"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "SCXML Editor",
+      "properties": {
+        "scxml.dataModelProfiles": {
+          "type": "object",
+          "default": {},
+          "description": "Maps processor-defined SCXML datamodel names to validation profiles.",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "expressionLanguage"
+            ],
+            "properties": {
+              "expressionLanguage": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "ecmascript",
+                  "xpath"
+                ]
+              },
+              "allowScript": {
+                "type": "boolean",
+                "default": false
+              },
+              "allowData": {
+                "type": "boolean",
+                "default": true
+              },
+              "allowAssign": {
+                "type": "boolean",
+                "default": true
+              },
+              "allowForeach": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

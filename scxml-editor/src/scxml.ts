@@ -259,6 +259,22 @@ export function validateScxmlSource(text:string,profiles:CustomDataModelProfiles
  if(roots.length!==1)return[problem('The document must contain exactly one scxml root element.',0,Math.max(1,text.length),'schema.root')];
  const out:ScxmlProblem[]=[];validateScxmlTree(text,roots[0],out);out.push(...validateDataModelExpressions(text,profiles).map(item=>problem(item.message,item.start,item.end,item.code,item.severity)));return out;
 }
+
+interface NormativeTransitionInfo { source:StateNode; transition:Transition; index:number; depth:number; order:number; domain?:StateNode; exitSet:Set<string>; }
+function normativeDepth(id:string,parents:Map<string,StateNode|undefined>):number{let n=0,p=parents.get(id);while(p){n++;p=parents.get(p.id);}return n;}
+function leastCommonCompoundAncestor(ids:string[],parents:Map<string,StateNode|undefined>):StateNode|undefined{if(!ids.length)return undefined;const chains=ids.map(id=>ancestorChain(id,parents));return chains[0].find(candidate=>candidate.kind!=='parallel'&&chains.every(chain=>chain.some(item=>item.id===candidate.id)));}
+function transitionDomain(source:StateNode,transition:Transition,semantics:ReturnType<typeof collectStateSemantics>):StateNode|undefined{if(!transition.targets.length)return undefined;if(transition.type==='internal'&&source.kind==='state'&&source.children.length&&transition.targets.every(target=>isDescendant(target,source.id,semantics.descendantsById)))return source;return leastCommonCompoundAncestor([source.id,...transition.targets],semantics.parentById);}
+function normativeDescendantOrSelf(id:string,ancestor:string,semantics:ReturnType<typeof collectStateSemantics>):boolean{return id===ancestor||isDescendant(id,ancestor,semantics.descendantsById);}
+function computeExitSet(domain:StateNode|undefined,all:StateNode[],semantics:ReturnType<typeof collectStateSemantics>):Set<string>{return domain?new Set(all.filter(state=>normativeDescendantOrSelf(state.id,domain.id,semantics)).map(state=>state.id)):new Set();}
+function descriptorMatches(left:string,right:string):boolean{const match=(d:string,e:string)=>d==='*'||(d.endsWith('.*')?(e===d.slice(0,-2)||e.startsWith(d.slice(0,-1))):(e===d||e.startsWith(d+'.')));return left.split(/\s+/).filter(Boolean).some(a=>right.split(/\s+/).filter(Boolean).some(b=>match(a,b)||match(b,a)));}
+function validateNormativeTransitions(states:StateNode[],messages:string[]):void{
+ const semantics=collectStateSemantics(states),all:StateNode[]=[];const collect=(state:StateNode):void=>{all.push(state);state.children.forEach(collect);};states.forEach(collect);const infos:NormativeTransitionInfo[]=[];let order=0;
+ for(const source of all)source.transitions.forEach((transition,index)=>{const domain=transitionDomain(source,transition,semantics);infos.push({source,transition,index,depth:normativeDepth(source.id,semantics.parentById),order:order++,domain,exitSet:computeExitSet(domain,all,semantics)});});
+ for(const info of infos){if(info.transition.targets.length&&!info.domain)messages.push(`Transition ${info.index+1} from ${info.source.id} has no legal transition domain.`);if(info.transition.type==='internal'&&info.domain?.id!==info.source.id)messages.push(`Internal transition ${info.index+1} from ${info.source.id} is not confined to descendants of its source.`);}
+ for(let i=0;i<infos.length;i++)for(let j=i+1;j<infos.length;j++){const a=infos[i],b=infos[j];if(!a.transition.event||!b.transition.event||!descriptorMatches(a.transition.event,b.transition.event))continue;const related=normativeDescendantOrSelf(a.source.id,b.source.id,semantics)||normativeDescendantOrSelf(b.source.id,a.source.id,semantics);if(related){const deeper=a.depth>b.depth?a:b,other=deeper===a?b:a;messages.push(`Transition ${deeper.index+1} from ${deeper.source.id} preempts matching ancestor transition ${other.index+1} from ${other.source.id} by source depth.`);}else if([...a.exitSet].some(id=>b.exitSet.has(id))){const first=a.order<b.order?a:b,second=first===a?b:a;messages.push(`Transition ${first.index+1} from ${first.source.id} wins document-order conflict with transition ${second.index+1} from ${second.source.id}.`);}}
+ for(const source of all){const first=source.transitions.findIndex(item=>!item.event&&!item.cond);if(first>=0&&first<source.transitions.length-1)messages.push(`Unconditional eventless transition ${first+1} from ${source.id} makes later transitions in the same source unreachable during stabilization.`);}
+}
+
 function validateReachability(states: StateNode[], rootInitial: string | undefined, errors: string[]): void {
   const all = new Map<string, StateNode>();
   const parent = new Map<string, StateNode | undefined>();
@@ -378,14 +394,15 @@ export function parseScxml(text: string, profiles: CustomDataModelProfiles = {})
   };
   states.forEach(state => visit(state));
   detectUnconditionalEventlessCycles(states, behavioralMessages);
+  validateNormativeTransitions(states, behavioralMessages);
   const rootInitial = readInitial(root);
   const effectiveRootInitial = rootInitial?.target || root['@_initial'];
   validateReachability(states, effectiveRootInitial, behavioralMessages);
   const semanticProblems = [...new Set(behavioralMessages)].map(message => {
     const token = /(?:state|region|history|target)\s+([A-Za-z_][\w.-]*)/i.exec(message)?.[1];
     const range: [number,number] = token ? findTextRange(text, token) : [0, Math.max(1, Math.min(text.length, 8))];
-    const severity: ScxmlProblemSeverity = /should contain|should define|cycle|unreachable|has no initial child|cannot complete normally/i.test(message) ? 'warning' : 'error';
-    const code = /unreachable/.test(message) ? 'behavior.unreachable' : /eventless transition cycle/.test(message) ? 'behavior.eventlessCycle' : /internal transition/.test(message) ? 'behavior.internalTransition' : /multiple targets|same region|ancestor and descendant/.test(message) ? 'behavior.targetSet' : /history/.test(message) ? 'behavior.historyTarget' : /parallel/.test(message) ? 'behavior.parallel' : /nesting depth/.test(message) ? 'behavior.depth' : 'behavior.validation';
+    const severity: ScxmlProblemSeverity = /should contain|should define|cycle|unreachable|has no initial child|cannot complete normally|preempts matching ancestor|document-order conflict/i.test(message) ? 'warning' : 'error';
+    const code = /preempts matching ancestor/.test(message) ? 'behavior.depthPriority' : /document-order conflict/.test(message) ? 'behavior.documentOrder' : /transition domain/.test(message) ? 'behavior.transitionDomain' : /later transitions.*unreachable/.test(message) ? 'behavior.eventlessDominance' : /unreachable/.test(message) ? 'behavior.unreachable' : /eventless transition cycle/.test(message) ? 'behavior.eventlessCycle' : /internal transition/.test(message) ? 'behavior.internalTransition' : /multiple targets|same region|ancestor and descendant/.test(message) ? 'behavior.targetSet' : /history/.test(message) ? 'behavior.historyTarget' : /parallel/.test(message) ? 'behavior.parallel' : /nesting depth/.test(message) ? 'behavior.depth' : 'behavior.validation';
     return problem(message, range[0], range[1], code, severity);
   });
   const problems = [...sourceProblems, ...semanticProblems];

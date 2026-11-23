@@ -1,0 +1,2 @@
+import * as assert from 'assert';import * as fs from 'fs';import * as path from 'path';
+suite('Stage 25.1 stabilization wiring',()=>{test('restores send, cancel, and problem reveal paths',()=>{const s=fs.readFileSync(path.join(__dirname,'..','extension.ts'),'utf8');for(const token of ['id="send-params"','id="send-content-mode"','id="send-content"',"message.command === 'buildStructuredCancel'",'structuredCancelReady',"message.command === 'revealProblem'",'TextEditorRevealType.InCenterIfOutsideViewport'])assert.ok(s.includes(token),token);});});

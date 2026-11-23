@@ -57,7 +57,7 @@
   
   
     <invoke id="service" type="scxml" src="child.scxml" autoforward="false">
-      <param name="input" expr="payload"/>
+      <param name="input"/>
       <finalize>
         <assign location="result" expr="_event.data"/>
       </finalize>
@@ -68,9 +68,7 @@
 
   <parallel id="ss6">
     <transition event="final1" target="f1"/>
-    <onentry>
-      <assign location="test1" expr="test1=test1+1"/>
-    </onentry>  
+    
     <state id="ss6_p1"/>
   
     <state id="ss6_p2"/>

@@ -381,10 +381,13 @@ export function parseScxml(text: string, profiles: CustomDataModelProfiles = {})
     state.transitions.forEach(transition => validateTargetSet(state, transition, semantics, behavioralMessages));
     if (depth > 64) behavioralMessages.push(`State ${state.id} exceeds the supported nesting depth of 64.`);
     if (state.kind === 'parallel') {
-      if (state.children.length < 2) behavioralMessages.push(`Parallel state ${state.id} should contain at least two regions.`);
-      state.children.forEach(region => {
+      // History pseudostates are legal direct children of a parallel state,
+      // but they are not parallel regions. Validate only actual region children.
+      const regions = state.children.filter(child => child.kind !== 'history');
+      if (regions.length < 2) behavioralMessages.push(`Parallel state ${state.id} should contain at least two regions.`);
+      regions.forEach(region => {
         if (region.kind !== 'state') behavioralMessages.push(`Parallel state ${state.id} region ${region.id} must be a state.`);
-        if (!region.initial && region.children.length > 0) behavioralMessages.push(`Parallel region ${region.id} should define an initial child.`);
+        if (region.kind === 'state' && !region.initial && region.children.length > 0) behavioralMessages.push(`Parallel region ${region.id} should define an initial child.`);
       });
     }
     if (state.kind === 'history') {

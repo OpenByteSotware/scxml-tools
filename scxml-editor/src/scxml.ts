@@ -106,6 +106,11 @@ function detectUnconditionalEventlessCycles(states: StateNode[], errors: string[
 
 
 const SCXML_NAMESPACE = 'http://www.w3.org/2005/07/scxml';
+const SCXML_PROCESSOR_URI = 'http://www.w3.org/TR/scxml/';
+const SCXML_PROCESSOR_ALIAS = 'scxml';
+function isScxmlProcessorType(value:string):boolean{return value===SCXML_PROCESSOR_ALIAS||value===SCXML_PROCESSOR_URI;}
+function isIoTarget(value:string):boolean{return value==='#_internal'||value==='#_parent'||/^#_scxml_[A-Za-z_][\w.-]*$/.test(value)||/^#_[A-Za-z_][\w.-]*$/.test(value)||isUri(value);}
+
 const KNOWN = new Set(['scxml','state','parallel','final','history','transition','initial','onentry','onexit','raise','if','elseif','else','foreach','log','datamodel','data','assign','donedata','content','param','script','send','cancel','invoke','finalize']);
 const EXECUTABLE = new Set(['raise','if','foreach','log','assign','script','send','cancel']);
 const CHILDREN: Record<string,Set<string>> = {
@@ -190,52 +195,24 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
       for(const required of REQUIRED[local]??[]){if(!getAttribute(element,required))add(`<${local}> requires attribute ${required}.`,element,'schema.requiredAttribute');}
       validateOrder(element);
       const id=getAttribute(element,'id')?.value;if(id!==undefined){if(!isXmlId(id))add(`ID ${id} is not a valid XML identifier.`,element,'schema.id','id');else if(ids.has(id))add(`Duplicate ID ${id}.`,element,'schema.duplicateId','id');else ids.set(id,element);}
-      if(local==='invoke'){const invokeId=getAttribute(element,'id')?.value;if(invokeId){if(invokeIds.has(invokeId))add(`Duplicate invoke ID ${invokeId}.`,element,'semantic.duplicateInvokeId','id');else invokeIds.set(invokeId,element);}}
-      const children=(name:string)=>element.children.filter(child=>!child.name.includes(':')&&child.localName===name);
-      if(['scxml','state'].includes(local)&&getAttribute(element,'initial')&&children('initial').length)add(`<${local}> cannot combine the initial attribute with an <initial> child.`,element,'schema.initialConflict','initial');
-      if(children('initial').length>1)add(`<${local}> may contain at most one <initial>.`,element,'schema.cardinality');
-      if(children('datamodel').length>1)add(`<${local}> may contain at most one <datamodel>.`,element,'schema.cardinality');
-      if(local==='final'&&children('donedata').length>1)add('<final> may contain at most one <donedata>.',element,'schema.cardinality');
-      if(local==='scxml'){
-        if(element.parent)add('<scxml> must be the document root.',element,'schema.root');
-        if(getAttribute(element,'version')?.value!=='1.0')add('The scxml version attribute must be "1.0".',element,'schema.version','version');
-        if(namespaceInScope(element,'')!==SCXML_NAMESPACE)add(`The scxml namespace must be ${SCXML_NAMESPACE}.`,element,'schema.namespace');
-        const binding=getAttribute(element,'binding')?.value;if(binding&&binding!=='early'&&binding!=='late')add('The scxml binding attribute must be early or late.',element,'schema.value','binding');
-        const base=getAttribute(element,'xml:base')?.value;if(base&&!isUri(base))add('xml:base must be a valid URI reference.',element,'schema.uri','xml:base');
-      }
-      if(local==='transition'){
-        const type=getAttribute(element,'type')?.value;if(type&&type!=='internal'&&type!=='external')add('Transition type must be internal or external.',element,'schema.value','type');
-        const target=getAttribute(element,'target')?.value;if(target&&!target.split(/\s+/).every(isXmlId))add('Transition target must be a whitespace-separated list of valid IDs.',element,'schema.idrefs','target');
-        const event=getAttribute(element,'event');
-        if(event){for(const descriptor of event.value.split(/\s+/).filter(Boolean)){if(descriptor!=='*'&&!/^[A-Za-z_][\w.-]*(?:\.\*)?$/.test(descriptor))out.push(problem(`Invalid transition event descriptor ${descriptor}.`,event.start,event.end,'semantic.eventDescriptor'));}}
-        if(element.parent?.localName==='initial'||element.parent?.localName==='history'){if(event)add(`${element.parent.localName} transitions must be eventless.`,element,'schema.eventless','event');if(!target)add(`${element.parent.localName} transition requires target.`,element,'schema.requiredAttribute');}
-      }
-      if(local==='initial'){if(children('transition').length!==1)add('<initial> requires exactly one transition child.',element,'schema.cardinality');}
-      if(local==='history'){
-        const type=getAttribute(element,'type')?.value;if(type&&type!=='shallow'&&type!=='deep')add('History type must be shallow or deep.',element,'schema.value','type');
-        if(!element.parent||!['state','parallel'].includes(element.parent.localName))add('<history> must be a child of state or parallel.',element,'schema.parent');
-        if(children('transition').length>1)add('<history> may contain at most one transition.',element,'schema.cardinality');
-      }
-      if(local==='final'&&element.children.some(child=>!child.name.includes(':')&&!['onentry','onexit','donedata'].includes(child.localName)))add('<final> contains an illegal child.',element,'schema.child');
-      if(local==='data'){
-        pair(element,'src','expr');const hasBody=bodyText(text,element)!=='';if((getAttribute(element,'src')||getAttribute(element,'expr'))&&hasBody)add('<data> cannot combine src or expr with inline content.',element,'schema.contentConflict');
-        const src=getAttribute(element,'src')?.value;if(src&&!isUri(src))add('data src must be a valid URI reference.',element,'schema.uri','src');
-      }
-      if(local==='content'){if(getAttribute(element,'expr')&&bodyText(text,element))add('<content> cannot combine expr with inline content.',element,'schema.contentConflict','expr');}
-      if(local==='param'){requireOne(element,['expr','location']);if(!element.selfClosing&&bodyText(text,element))add('<param> must be empty.',element,'schema.empty');}
       if(local==='send'){
         pair(element,'event','eventexpr');pair(element,'target','targetexpr');pair(element,'type','typeexpr');pair(element,'id','idlocation');pair(element,'delay','delayexpr');requireOne(element,['event','eventexpr']);
         const delay=getAttribute(element,'delay')?.value;if(delay&&!isDelay(delay))add('send delay must use a non-negative number followed by ms or s.',element,'schema.delay','delay');
-        const namelist=getAttribute(element,'namelist')?.value;if(namelist&&!namelist.split(/\s+/).every(isXmlId))add('send namelist must contain valid identifiers.',element,'schema.namelist','namelist');
-        if(children('content').length>1)add('<send> may contain at most one content.',element,'schema.cardinality');if(children('content').length&&children('param').length)add('<send> cannot combine content with param.',element,'schema.contentConflict');
+        const target=getAttribute(element,'target')?.value;if(target&&!isIoTarget(target))add('send target must be a URI or an SCXML target.',element,'io.target','target');
+        const type=getAttribute(element,'type')?.value;if(type&&type!==SCXML_PROCESSOR_ALIAS&&!isUri(type))add('send type must be scxml or an I/O processor URI.',element,'io.processorType','type');
       }
-      if(local==='cancel'){pair(element,'sendid','sendidexpr');requireOne(element,['sendid','sendidexpr']);if(!element.selfClosing&&(element.children.length||bodyText(text,element)))add('<cancel> must be empty.',element,'schema.empty');}
+      if(local==='invoke'){const invokeId=getAttribute(element,'id')?.value;if(invokeId){if(invokeIds.has(invokeId))add(`Duplicate invoke ID ${invokeId}.`,element,'semantic.duplicateInvokeId','id');else invokeIds.set(invokeId,element);}}
+      const children=(name:string)=>element.children.filter(child=>!child.name.includes(':')&&child.localName===name);
       if(local==='invoke'){
         pair(element,'id','idlocation');pair(element,'type','typeexpr');pair(element,'src','srcexpr');
         const auto=getAttribute(element,'autoforward')?.value;if(auto&&auto!=='true'&&auto!=='false')add('invoke autoforward must be true or false.',element,'schema.boolean','autoforward');
         const src=getAttribute(element,'src')?.value;if(src&&!isUri(src))add('invoke src must be a valid URI reference.',element,'schema.uri','src');
+        const type=getAttribute(element,'type')?.value;if(type&&type!==SCXML_PROCESSOR_ALIAS&&!isUri(type))add('invoke type must be scxml or an absolute/relative processor URI.',element,'io.processorType','type');
         const namelist=getAttribute(element,'namelist')?.value;if(namelist&&!namelist.split(/\s+/).every(isXmlId))add('invoke namelist must contain valid identifiers.',element,'schema.namelist','namelist');
         if(children('content').length>1)add('<invoke> may contain at most one content.',element,'schema.cardinality');if(children('finalize').length>1)add('<invoke> may contain at most one finalize.',element,'schema.cardinality');if(children('content').length&&(getAttribute(element,'src')||getAttribute(element,'srcexpr')))add('<invoke> cannot combine src or srcexpr with content.',element,'schema.contentConflict');
+        const inline=children('content')[0]?.children.find(child=>child.localName==='scxml');
+        if(inline&&type&&!isScxmlProcessorType(type))add('Inline SCXML content requires invoke type scxml or the SCXML processor URI.',element,'invoke.inlineType','type');
+        if(inline&&src)add('Inline SCXML content cannot be combined with invoke src.',element,'schema.contentConflict','src');
       }
       if(local==='donedata'){if(children('content').length>1)add('<donedata> may contain at most one content.',element,'schema.cardinality');if(children('content').length&&children('param').length)add('<donedata> cannot combine content with param.',element,'schema.contentConflict');}
       if(local==='script'){const src=getAttribute(element,'src')?.value;if(src&&!isUri(src))add('script src must be a valid URI reference.',element,'schema.uri','src');if(src&&bodyText(text,element))add('<script> cannot combine src with inline script content.',element,'schema.contentConflict','src');}
@@ -264,6 +241,12 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
         if(descriptor.startsWith('done.state.')){const id=descriptor.slice('done.state.'.length);if(!ids.has(id))out.push(problem(`Transition references missing completion state ${id}.`,event.start,event.end,'semantic.missingStateCompletion'));}
         if(descriptor.startsWith('done.invoke.')){const id=descriptor.slice('done.invoke.'.length);if(!invokeIds.has(id))out.push(problem(`Transition references missing invoke completion ${id}.`,event.start,event.end,'semantic.missingInvokeCompletion'));}
       }}
+    }
+    if(element.localName==='send'){
+      const target=getAttribute(element,'target');
+      if(target?.value.startsWith('#_')&&!['#_internal','#_parent'].includes(target.value)&&!target.value.startsWith('#_scxml_')){
+        const invokeId=target.value.slice(2);if(!invokeIds.has(invokeId))out.push(problem(`Send target references missing invoke ID ${invokeId}.`,target.start,target.end,'io.missingInvokeTarget'));
+      }
     }
   }
 }

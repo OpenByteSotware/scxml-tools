@@ -1,0 +1,9 @@
+import * as assert from 'assert';
+import { createStructuredInvokeXml } from '../editorEdits';
+import { validateScxmlSource } from '../scxml';
+const root=(body:string)=>`<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="a"><state id="a">${body}</state></scxml>`;
+suite('Stage 27 invocation and I/O processor semantics',()=>{
+ test('validates SCXML targets and literal processor types',()=>{let p=validateScxmlSource(root(`<onentry><send event="go" target="#_internal" type="scxml"/></onentry>`));assert.ok(!p.some(x=>x.code.startsWith('io.')));p=validateScxmlSource(root(`<onentry><send event="go" target="#_missing" type="not a uri"/></onentry>`));assert.ok(p.some(x=>x.code==='io.missingInvokeTarget'));assert.ok(p.some(x=>x.code==='io.processorType'));});
+ test('validates invoke completion and inline SCXML type',()=>{const p=validateScxmlSource(root(`<invoke id="worker" type="vendor"><content><scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"/></content></invoke><transition event="done.invoke.worker"/>`));assert.ok(p.some(x=>x.code==='invoke.inlineType'));assert.ok(!p.some(x=>x.code==='semantic.missingInvokeCompletion'));});
+ test('builds external and inline structured invokes',()=>{const external=createStructuredInvokeXml({idMode:'literal',id:'worker',typeMode:'literal',type:'scxml',sourceMode:'src',source:'child.scxml',autoforward:true,params:[{name:'payload',mode:'expr',value:'request'}],finalize:'<log expr="_event.data"/>'});assert.match(external,/id="worker"/);assert.match(external,/autoforward="true"/);assert.match(external,/src="child.scxml"/);assert.match(external,/<finalize>/);const inline=createStructuredInvokeXml({idMode:'none',typeMode:'none',sourceMode:'inline',source:'<scxml xmlns="http:\/\/www.w3.org\/2005\/07\/scxml" version="1.0"\/>'});assert.match(inline,/type="scxml"/);assert.match(inline,/<content><scxml/);});
+});

@@ -810,3 +810,26 @@ export function createStructuredCancelXml(action: StructuredCancelAction): strin
   tag = setAttribute(tag, action.mode === 'expression' ? 'sendidexpr' : 'sendid', value);
   return tag;
 }
+
+export interface StructuredInvokeAction {
+  idMode: 'none'|'literal'|'location'; id?: string;
+  typeMode: 'none'|'literal'|'expression'; type?: string;
+  sourceMode: 'none'|'src'|'expression'|'inline'; source?: string;
+  autoforward?: boolean; namelist?: string;
+  params?: Array<{name:string;mode:'expr'|'location';value:string}>;
+  finalize?: string;
+}
+export function createStructuredInvokeXml(action: StructuredInvokeAction): string {
+  let tag='<invoke/>';
+  const setChoice=(mode:string,value:string|undefined,literal:string,expression:string):void=>{const normalized=String(value??'').trim();if(mode!=='none'&&!normalized)throw new Error(`Invoke ${literal} value is required.`);if(mode==='literal'||mode==='src')tag=setAttribute(tag,literal,normalized);else if(mode==='expression'||mode==='location')tag=setAttribute(tag,expression,normalized);};
+  setChoice(action.idMode,action.id,'id','idlocation');
+  setChoice(action.typeMode,action.type,'type','typeexpr');
+  if(action.sourceMode==='src'||action.sourceMode==='expression')setChoice(action.sourceMode,action.source,'src','srcexpr');
+  tag=setAttribute(tag,'autoforward',action.autoforward?'true':'');
+  tag=setAttribute(tag,'namelist',String(action.namelist??'').trim().replace(/\s+/g,' '));
+  const children:string[]=[];
+  for(const param of action.params??[]){const name=String(param.name??'').trim(),value=String(param.value??'').trim();if(!name||!value)throw new Error('Each invoke parameter requires a name and value.');if(!/^[A-Za-z_][\w.-]*$/.test(name))throw new Error(`Invoke parameter name ${name} is invalid.`);children.push(`<param name="${escapeXml(name)}" ${param.mode==='location'?'location':'expr'}="${escapeXml(value)}"/>`);}
+  if(action.sourceMode==='inline'){const source=String(action.source??'').trim();const root=parseXmlSource(source).roots.find(item=>item.localName==='scxml');if(!root||root.start!==0||root.end!==source.length)throw new Error('Inline invoke source must be one complete scxml element.');children.push(`<content>${source}</content>`);if(action.typeMode==='none')tag=setAttribute(tag,'type','scxml');}
+  const finalize=String(action.finalize??'').trim();if(finalize){validateExecutableFragment(finalize);children.push(`<finalize>\n${indentFragment(finalize,'  ')}\n</finalize>`);}
+  return children.length?`${tag.replace(/\/\s*>$/,'>')}\n${indentFragment(children.join('\n'),'  ')}\n</invoke>`:tag;
+}

@@ -159,6 +159,7 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
     const [start, end] = attribute ? attributeRange(element, attribute) : [element.start, element.openEnd]; out.push(problem(message,start,end,code));
   };
   const ids = new Map<string, XmlSourceElement>();
+  const invokeIds = new Map<string, XmlSourceElement>();
   const order: Record<string,string[][]> = {
     scxml:[['datamodel'],['script'],['initial'],['state','parallel','final']],
     state:[['onentry'],['onexit'],['transition'],['initial'],['state','parallel','final','history'],['datamodel'],['invoke']],
@@ -189,6 +190,7 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
       for(const required of REQUIRED[local]??[]){if(!getAttribute(element,required))add(`<${local}> requires attribute ${required}.`,element,'schema.requiredAttribute');}
       validateOrder(element);
       const id=getAttribute(element,'id')?.value;if(id!==undefined){if(!isXmlId(id))add(`ID ${id} is not a valid XML identifier.`,element,'schema.id','id');else if(ids.has(id))add(`Duplicate ID ${id}.`,element,'schema.duplicateId','id');else ids.set(id,element);}
+      if(local==='invoke'){const invokeId=getAttribute(element,'id')?.value;if(invokeId){if(invokeIds.has(invokeId))add(`Duplicate invoke ID ${invokeId}.`,element,'semantic.duplicateInvokeId','id');else invokeIds.set(invokeId,element);}}
       const children=(name:string)=>element.children.filter(child=>!child.name.includes(':')&&child.localName===name);
       if(['scxml','state'].includes(local)&&getAttribute(element,'initial')&&children('initial').length)add(`<${local}> cannot combine the initial attribute with an <initial> child.`,element,'schema.initialConflict','initial');
       if(children('initial').length>1)add(`<${local}> may contain at most one <initial>.`,element,'schema.cardinality');
@@ -204,7 +206,9 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
       if(local==='transition'){
         const type=getAttribute(element,'type')?.value;if(type&&type!=='internal'&&type!=='external')add('Transition type must be internal or external.',element,'schema.value','type');
         const target=getAttribute(element,'target')?.value;if(target&&!target.split(/\s+/).every(isXmlId))add('Transition target must be a whitespace-separated list of valid IDs.',element,'schema.idrefs','target');
-        if(element.parent?.localName==='initial'||element.parent?.localName==='history'){if(getAttribute(element,'event'))add(`${element.parent.localName} transitions must be eventless.`,element,'schema.eventless','event');if(!target)add(`${element.parent.localName} transition requires target.`,element,'schema.requiredAttribute');}
+        const event=getAttribute(element,'event');
+        if(event){for(const descriptor of event.value.split(/\s+/).filter(Boolean)){if(descriptor!=='*'&&!/^[A-Za-z_][\w.-]*(?:\.\*)?$/.test(descriptor))out.push(problem(`Invalid transition event descriptor ${descriptor}.`,event.start,event.end,'semantic.eventDescriptor'));}}
+        if(element.parent?.localName==='initial'||element.parent?.localName==='history'){if(event)add(`${element.parent.localName} transitions must be eventless.`,element,'schema.eventless','event');if(!target)add(`${element.parent.localName} transition requires target.`,element,'schema.requiredAttribute');}
       }
       if(local==='initial'){if(children('transition').length!==1)add('<initial> requires exactly one transition child.',element,'schema.cardinality');}
       if(local==='history'){
@@ -236,7 +240,7 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
       if(local==='donedata'){if(children('content').length>1)add('<donedata> may contain at most one content.',element,'schema.cardinality');if(children('content').length&&children('param').length)add('<donedata> cannot combine content with param.',element,'schema.contentConflict');}
       if(local==='script'){const src=getAttribute(element,'src')?.value;if(src&&!isUri(src))add('script src must be a valid URI reference.',element,'schema.uri','src');if(src&&bodyText(text,element))add('<script> cannot combine src with inline script content.',element,'schema.contentConflict','src');}
       if(local==='assign'&&getAttribute(element,'type')&&getAttribute(element,'attr')){ /* both are jointly allowed for XML data models */ }
-      if(local==='raise'){const event=getAttribute(element,'event')?.value;if(event&&(!/^[A-Za-z_][\w.-]*$/.test(event)||event==='*'||event.endsWith('.*')))add('raise event must be one concrete event name.',element,'schema.eventName','event');}
+      if(local==='raise'||local==='send'){const event=getAttribute(element,'event')?.value;if(event&&(!/^[A-Za-z_][\w.-]*$/.test(event)||event==='*'||event.endsWith('.*')||/\s/.test(event)))add(`${local} event must be one concrete event name.`,element,'schema.eventName','event');}
       if(local==='if'){
         const branches=element.children.filter(child=>!child.name.includes(':')&&(child.localName==='elseif'||child.localName==='else'));let elseSeen=false;
         for(const branch of branches){if(elseSeen)add(`<${branch.localName}> cannot appear after <else>.`,branch,'schema.ordering');if(branch.localName==='else')elseSeen=true;}
@@ -250,7 +254,18 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
   const checkRef=(element:XmlSourceElement,name:string,directOwner?:XmlSourceElement):void=>{const attribute=getAttribute(element,name);if(!attribute)return;for(const id of attribute.value.split(/\s+/).filter(Boolean)){if(!ids.has(id))out.push(problem(`${name} references missing ID ${id}.`,attribute.start,attribute.end,'schema.missingReference'));else if(directOwner&&ids.get(id)?.parent!==directOwner)out.push(problem(`${name} target ${id} must be a direct child.`,attribute.start,attribute.end,'schema.referenceScope'));}};
   for(const element of root.children.length||root.localName==='scxml'?[root,...root.children]:[root]){void element;}
   const all=[root];for(let index=0;index<all.length;index++)all.push(...all[index].children);
-  for(const element of all){if(element.name.includes(':'))continue;if(element.localName==='scxml'||element.localName==='state')checkRef(element,'initial',element);if(element.localName==='transition')checkRef(element,'target',element.parent?.localName==='initial'?element.parent.parent:undefined);}
+  for(const element of all){
+    if(element.name.includes(':'))continue;
+    if(element.localName==='scxml'||element.localName==='state')checkRef(element,'initial',element);
+    if(element.localName==='transition'){
+      checkRef(element,'target',element.parent?.localName==='initial'?element.parent.parent:undefined);
+      const event=getAttribute(element,'event');
+      if(event){for(const descriptor of event.value.split(/\s+/).filter(Boolean)){
+        if(descriptor.startsWith('done.state.')){const id=descriptor.slice('done.state.'.length);if(!ids.has(id))out.push(problem(`Transition references missing completion state ${id}.`,event.start,event.end,'semantic.missingStateCompletion'));}
+        if(descriptor.startsWith('done.invoke.')){const id=descriptor.slice('done.invoke.'.length);if(!invokeIds.has(id))out.push(problem(`Transition references missing invoke completion ${id}.`,event.start,event.end,'semantic.missingInvokeCompletion'));}
+      }}
+    }
+  }
 }
 
 export function validateScxmlSource(text:string):ScxmlProblem[]{
@@ -261,42 +276,6 @@ export function validateScxmlSource(text:string):ScxmlProblem[]{
  if(roots.length!==1)return[problem('The document must contain exactly one scxml root element.',0,Math.max(1,text.length),'schema.root')];
  const out:ScxmlProblem[]=[];validateScxmlTree(text,roots[0],out);out.push(...validateDataModelExpressions(text).map(item=>problem(item.message,item.start,item.end,item.code,item.severity)));return out;
 }
-function validateEventDescriptors(states: StateNode[], errors: string[]): void {
-  const stateIds = new Set<string>(); const invokeIds = new Set<string>();
-  const walk = (state: StateNode): void => { stateIds.add(state.id); state.children.forEach(walk); };
-  states.forEach(walk);
-  // Invoke IDs are collected from source XML separately in parseScxml; this helper validates syntax and done.state.
-  const visit = (state: StateNode): void => {
-    state.transitions.forEach(transition => {
-      String(transition.event ?? '').split(/\s+/).filter(Boolean).forEach(descriptor => {
-        if (!/^[A-Za-z_][\w.-]*(?:\.\*)?$/.test(descriptor) && descriptor !== '*') {
-          errors.push(`Transition in state ${state.id} has invalid event descriptor ${descriptor}.`);
-        }
-        if (descriptor.startsWith('done.state.')) {
-          const id = descriptor.slice('done.state.'.length);
-          if (!stateIds.has(id)) { errors.push(`Transition in state ${state.id} references missing completion state ${id}.`); }
-        }
-      });
-    });
-    state.children.forEach(visit);
-  };
-  states.forEach(visit);
-}
-
-function validateInvokeCompletionEvents(text: string, states: StateNode[], errors: string[]): void {
-  const invokeIds = new Set([...text.matchAll(/<invoke\b[^>]*\bid\s*=\s*(["'])(.*?)\1/gi)].map(match => match[2]));
-  const visit = (state: StateNode): void => {
-    state.transitions.forEach(transition => String(transition.event ?? '').split(/\s+/).filter(Boolean).forEach(descriptor => {
-      if (descriptor.startsWith('done.invoke.')) {
-        const id = descriptor.slice('done.invoke.'.length);
-        if (!invokeIds.has(id)) { errors.push(`Transition in state ${state.id} references missing invoke completion ${id}.`); }
-      }
-    }));
-    state.children.forEach(visit);
-  };
-  states.forEach(visit);
-}
-
 function validateReachability(states: StateNode[], rootInitial: string | undefined, errors: string[]): void {
   const all = new Map<string, StateNode>();
   const parent = new Map<string, StateNode | undefined>();
@@ -329,24 +308,6 @@ function validateReachability(states: StateNode[], rootInitial: string | undefin
   });
 }
 
-
-function validateProducedEventNames(text: string, errors: string[]): void {
-  const validate = (element: string, value: string): void => {
-    const name = value.trim();
-    if (!name) { errors.push(`${element} event must not be empty.`); return; }
-    if (/\s/.test(name)) { errors.push(`${element} event must be one event name, not a whitespace-separated descriptor list: ${name}.`); }
-    if (name === '*' || name.endsWith('.*')) { errors.push(`${element} event must be a concrete event name and cannot use wildcard descriptor syntax: ${name}.`); }
-    if (!/^[A-Za-z_][\w.-]*$/.test(name)) { errors.push(`${element} has invalid event name ${name}.`); }
-  };
-  for (const match of text.matchAll(/<raise\b([^>]*)\/?>/gi)) {
-    const value = /\bevent\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2];
-    if (value !== undefined) validate('raise', value);
-  }
-  for (const match of text.matchAll(/<send\b([^>]*)\/?>/gi)) {
-    const value = /\bevent\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2];
-    if (value !== undefined) validate('send', value);
-  }
-}
 
 export function parseScxml(text: string): ScxmlModel {
   const sourceProblems = validateScxmlSource(text);
@@ -409,131 +370,50 @@ export function parseScxml(text: string): ScxmlModel {
   for (const kind of ['state', 'parallel', 'final', 'history'] as StateKind[]) {
     asArray(root[kind]).forEach((state, index) => states.push(readState(state, kind, `${kind}${index + 1}`)));
   }
-  duplicates.forEach(id => errors.push(`Duplicate state id: ${id}`));
+  // Structural, lexical, reference, and data-model diagnostics are owned exclusively by
+  // validateScxmlSource(). The model pass below performs only cross-state behavioral analysis.
+  const behavioralMessages: string[] = [];
   const semantics = collectStateSemantics(states);
-
-  const visit = (state: StateNode, depth = 0) => {
-    state.transitions.flatMap(t => t.targets).filter(target => !ids.has(target)).forEach(target => errors.push(`State ${state.id} targets missing state ${target}.`));
-    state.transitions.forEach(transition => validateTargetSet(state, transition, semantics, errors));
-    state.transitions.filter(t => t.type && t.type !== 'internal' && t.type !== 'external').forEach(() => errors.push(`State ${state.id} has an invalid transition type.`));
-    if (depth > 64) { errors.push(`State ${state.id} exceeds the supported nesting depth of 64.`); }
-    const initialTargets = String(state.initial ?? '').split(/\s+/).filter(Boolean);
-    if (state.kind !== 'parallel' && initialTargets.length > 1) { errors.push(`State ${state.id} must define at most one initial child.`); }
-    initialTargets.filter(target => !state.children.some(child => child.id === target)).forEach(target => errors.push(`State ${state.id} has invalid initial child ${target}.`));
-    if (state.initialTransition) {
-      if (!state.initialTransition.target) { errors.push(`State ${state.id} explicit initial transition requires a target.`); }
-      if (state.initialTransition.target && String(state.initialTransition.target).split(/\s+/).filter(Boolean).length !== 1) { errors.push(`State ${state.id} explicit initial transition must have exactly one target.`); }
-      if (state.initialTransition.target && !state.children.some(child => child.id === state.initialTransition!.target)) { errors.push(`State ${state.id} explicit initial target must be a direct child.`); }
-    }
-    if (state.kind === 'parallel' && state.initial) { errors.push(`Parallel state ${state.id} must not define an initial state; all direct regions are entered.`); }
-    if (state.kind === 'history') {
-      if (depth === 0) { errors.push(`History ${state.id} must be a child of state or parallel.`); }
-      if (state.children.length) { errors.push(`History ${state.id} cannot contain child states.`); }
-      if (state.transitions.length > 1) { errors.push(`History ${state.id} may contain at most one default transition.`); }
-      if (state.transitions[0] && state.transitions[0].targets.length < 1) { errors.push(`History ${state.id} default transition requires a target.`); }
-      const owner = semantics.parentById.get(state.id);
-      if (owner && state.transitions[0]) {
-        state.transitions[0].targets.forEach(target => {
-          const legal = state.historyType === 'deep' ? isDescendant(target, owner.id, semantics.descendantsById) : owner.children.some(child => child.id === target && child.kind !== 'history');
-          if (!legal) { errors.push(`${state.historyType === 'deep' ? 'Deep' : 'Shallow'} history ${state.id} default target ${target} is outside its legal ${owner.id} scope.`); }
-        });
-      }
-    }
-    if (state.kind === 'final') {
-      if (state.children.length) { errors.push(`Final state ${state.id} cannot contain child states.`); }
-      if (state.transitions.length) { errors.push(`Final state ${state.id} cannot contain outgoing transitions.`); }
-      (state.doneData?.params ?? []).forEach(param => {
-        if (!param.name) { errors.push(`Final state ${state.id} has a done-data param without a name.`); }
-        if ((param.expr ? 1 : 0) + (param.location ? 1 : 0) !== 1) { errors.push(`Done-data param ${param.name || '(unnamed)'} must define exactly one of expr or location.`); }
-      });
-    }
+  const visit = (state: StateNode, depth = 0): void => {
+    state.transitions.forEach(transition => validateTargetSet(state, transition, semantics, behavioralMessages));
+    if (depth > 64) behavioralMessages.push(`State ${state.id} exceeds the supported nesting depth of 64.`);
     if (state.kind === 'parallel') {
-      if (state.children.length < 2) { errors.push(`Parallel state ${state.id} should contain at least two regions.`); }
+      if (state.children.length < 2) behavioralMessages.push(`Parallel state ${state.id} should contain at least two regions.`);
       state.children.forEach(region => {
-        if (region.kind !== 'state') { errors.push(`Parallel state ${state.id} region ${region.id} must be a state.`); }
-        if (!region.initial && region.children.length > 0) { errors.push(`Parallel region ${region.id} should define an initial child.`); }
+        if (region.kind !== 'state') behavioralMessages.push(`Parallel state ${state.id} region ${region.id} must be a state.`);
+        if (!region.initial && region.children.length > 0) behavioralMessages.push(`Parallel region ${region.id} should define an initial child.`);
       });
     }
-    validateData(state.dataModel ?? [], `State ${state.id} datamodel`);
+    if (state.kind === 'history') {
+      const owner = semantics.parentById.get(state.id);
+      if (owner && state.transitions[0]) state.transitions[0].targets.forEach(target => {
+        const legal = state.historyType === 'deep' ? isDescendant(target, owner.id, semantics.descendantsById) : owner.children.some(child => child.id === target && child.kind !== 'history');
+        if (!legal) behavioralMessages.push(`${state.historyType === 'deep' ? 'Deep' : 'Shallow'} history ${state.id} default target ${target} is outside its legal ${owner.id} scope.`);
+      });
+    }
     state.children.forEach(child => visit(child, depth + 1));
   };
   states.forEach(state => visit(state));
-  detectUnconditionalEventlessCycles(states, errors);
-
+  detectUnconditionalEventlessCycles(states, behavioralMessages);
   const rootInitial = readInitial(root);
   const effectiveRootInitial = rootInitial?.target || root['@_initial'];
-  const rootInitialTargets = String(effectiveRootInitial ?? '').split(/\s+/).filter(Boolean);
-  if (rootInitialTargets.length > 1) { errors.push('The SCXML state chart must define at most one initial state.'); }
-  rootInitialTargets.filter(target => !states.some(state => state.id === target)).forEach(target => errors.push(`Initial state ${target} must be a direct child of scxml.`));
-  if (rootInitial && !rootInitial.target) { errors.push('The SCXML explicit initial transition requires a target.'); }
-  validateEventDescriptors(states, errors);
-  validateProducedEventNames(text, errors);
-  validateInvokeCompletionEvents(text, states, errors);
-  validateReachability(states, effectiveRootInitial, errors);
-
-  for (const match of text.matchAll(/<transition\b([^>]*)>/gi)) {
-    const type = /\btype\s*=\s*(["'])(.*?)\1/i.exec(match[1])?.[2];
-    if (type && type !== 'internal' && type !== 'external') { errors.push(`Transition type must be internal or external; found ${type}.`); }
-  }
-  for (const match of text.matchAll(/<initial\b[^>]*>([\s\S]*?)<\/initial\s*>/gi)) {
-    if (/<transition\b[^>]*\bevent\s*=/.test(match[1])) { errors.push('Initial transitions must be eventless.'); }
-  }
-  for (const match of text.matchAll(/<history\b[^>]*>([\s\S]*?)<\/history\s*>/gi)) {
-    if (/<transition\b[^>]*\bevent\s*=/.test(match[1])) { errors.push('History default transitions must be eventless.'); }
-  }
-  for (const match of text.matchAll(/<raise\b([^>]*)\/?\s*>/gi)) {
-    if (!/\bevent\s*=/.test(match[1])) { errors.push('raise requires an event attribute.'); }
-  }
-  for (const match of text.matchAll(/<assign\b([^>]*)\/?\s*>/gi)) {
-    if (!/\blocation\s*=/.test(match[1])) { errors.push('assign requires a location attribute.'); }
-  }
-  for (const match of text.matchAll(/<script\b([^>]*)>/gi)) {
-    if (/\bsrc\s*=/.test(match[1]) && !/\/\s*>$/.test(match[0])) { errors.push('script with src must be empty and cannot contain inline content.'); }
-  }
-  for (const match of text.matchAll(/<if\b([^>]*)>/gi)) {
-    if (!/\bcond\s*=/.test(match[1])) { errors.push('if requires a cond attribute.'); }
-  }
-  for (const match of text.matchAll(/<elseif\b([^>]*)\/?\s*>/gi)) {
-    if (!/\bcond\s*=/.test(match[1])) { errors.push('elseif requires a cond attribute.'); }
-  }
-  for (const match of text.matchAll(/<foreach\b([^>]*)>/gi)) {
-    if (!/\barray\s*=/.test(match[1])) { errors.push('foreach requires an array attribute.'); }
-    if (!/\bitem\s*=/.test(match[1])) { errors.push('foreach requires an item attribute.'); }
-  }
-  for (const match of text.matchAll(/<send\b([^>]*)>/gi)) {
-    const attrs = match[1];
-    const pairs = [['event','eventexpr'], ['target','targetexpr'], ['type','typeexpr'], ['id','idlocation'], ['delay','delayexpr']];
-    pairs.forEach(([literal, expression]) => { if (new RegExp(`\\b${literal}\\s*=`).test(attrs) && new RegExp(`\\b${expression}\\s*=`).test(attrs)) errors.push(`send cannot define both ${literal} and ${expression}.`); });
-    if (!/\bevent(?:expr)?\s*=/.test(attrs)) { errors.push('send requires event or eventexpr.'); }
-  }
-  for (const match of text.matchAll(/<cancel\b([^>]*)\/?\s*>/gi)) {
-    if (!/\bsendid(?:expr)?\s*=/.test(match[1])) { errors.push('cancel requires sendid or sendidexpr.'); }
-    if (/\bsendid\s*=/.test(match[1]) && /\bsendidexpr\s*=/.test(match[1])) { errors.push('cancel cannot define both sendid and sendidexpr.'); }
-  }
-  for (const match of text.matchAll(/<invoke\b([^>]*)>/gi)) {
-    const attrs = match[1];
-    const pairs = [['id','idlocation'], ['type','typeexpr'], ['src','srcexpr']];
-    pairs.forEach(([literal, expression]) => { if (new RegExp(`\\b${literal}\\s*=`).test(attrs) && new RegExp(`\\b${expression}\\s*=`).test(attrs)) errors.push(`invoke cannot define both ${literal} and ${expression}.`); });
-  }
-
+  validateReachability(states, effectiveRootInitial, behavioralMessages);
+  const semanticProblems = [...new Set(behavioralMessages)].map(message => {
+    const token = /(?:state|region|history|target)\s+([A-Za-z_][\w.-]*)/i.exec(message)?.[1];
+    const range: [number,number] = token ? findTextRange(text, token) : [0, Math.max(1, Math.min(text.length, 8))];
+    const severity: ScxmlProblemSeverity = /should contain|should define|cycle|unreachable|has no initial child|cannot complete normally/i.test(message) ? 'warning' : 'error';
+    const code = /unreachable/.test(message) ? 'behavior.unreachable' : /eventless transition cycle/.test(message) ? 'behavior.eventlessCycle' : /internal transition/.test(message) ? 'behavior.internalTransition' : /multiple targets|same region|ancestor and descendant/.test(message) ? 'behavior.targetSet' : /history/.test(message) ? 'behavior.historyTarget' : /parallel/.test(message) ? 'behavior.parallel' : /nesting depth/.test(message) ? 'behavior.depth' : 'behavior.validation';
+    return problem(message, range[0], range[1], code, severity);
+  });
+  const problems = [...sourceProblems, ...semanticProblems];
+  const allErrors = problems.map(item => item.message);
   const version = root['@_version'];
   const namespace = root['@_xmlns'];
   const binding = root['@_binding'];
-  if (version !== '1.0') { errors.push('The scxml version attribute must be "1.0".'); }
-  if (namespace !== 'http://www.w3.org/2005/07/scxml') { errors.push('The scxml namespace must be http://www.w3.org/2005/07/scxml.'); }
-  if (binding && binding !== 'early' && binding !== 'late') { errors.push('The scxml binding attribute must be "early" or "late".'); }
-
-  const rangedMessages = new Set(sourceProblems.map(item => item.message));
-  const semanticProblems = errors.filter(message => !rangedMessages.has(message)).map(message => {
-    const token = /(?:state|target|id|History|Data)\s+([A-Za-z_][\w.-]*)/i.exec(message)?.[1];
-    const range: [number,number] = token ? findTextRange(text, token) : [0, Math.max(1, Math.min(text.length, 8))];
-    const severity: ScxmlProblemSeverity = /should contain|should define|cycle|unreachable|has no initial child|cannot complete normally/i.test(message) ? 'warning' : 'error';
-    return problem(message, range[0], range[1], 'semantic.validation', severity);
-  });
   return {
     name: root['@_name'], version, namespace, dataModel: readDataDeclarations(root),
     initial: effectiveRootInitial, initialTransition: rootInitial,
     datamodel: root['@_datamodel'], binding, xmlBase: root['@_xml:base'],
-    states, ids, errors, problems: [...sourceProblems, ...semanticProblems]
+    states, ids, errors: allErrors, problems
   };
 }

@@ -25,7 +25,7 @@ export class ScxmlSimulator {
  recordCancellation(id:string):void{this.pending.delete(id);this.trace.push({kind:'cancelled',message:`Cancelled scheduled send ${id}.`});}
  private result():SimulationResult{return{snapshot:this.snapshot(),effects:[...this.effects]};}
  private snapshot():SimulationSnapshot{return{active:this.completedFinalStateId?[this.completedFinalStateId]:this.atomicActive(),trace:[...this.trace],completed:this.sessionCompleted,completionOutput:this.cloneValue(this.completionOutput),step:this.step,pending:[...this.pending].map(([id,item])=>({id,...item})),dataModel:this.cloneData(this.dataModel),logs:[...this.logs]};}
- private atomicActive():string[]{return[...this.active].filter(id=>{const s=this.byId.get(id);return s&&!s.children.some(c=>this.active.has(c.id));}).sort();}
+ private atomicActive():string[]{return[...this.active].filter(id=>{const s=this.byId.get(id);return s&&!s.children.some(c=>this.active.has(c.id));}).sort((a,b)=>this.documentOrder(a)-this.documentOrder(b));}
  private documentOrder(id:string):number{return this.stateOrder.get(id)??Number.MAX_SAFE_INTEGER;}
  private entryOrder(ids:string[]):string[]{return[...new Set(ids)].sort((a,b)=>this.ancestors(a).length-this.ancestors(b).length||this.documentOrder(a)-this.documentOrder(b));}
  private exitOrder(ids:string[]):string[]{return[...new Set(ids)].sort((a,b)=>this.ancestors(b).length-this.ancestors(a).length||this.documentOrder(b)-this.documentOrder(a));}

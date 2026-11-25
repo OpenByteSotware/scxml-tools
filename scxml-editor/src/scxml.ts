@@ -417,10 +417,31 @@ export function parseScxml(text: string, profiles: CustomDataModelProfiles = {})
   for (const kind of ['state', 'parallel', 'final', 'history'] as StateKind[]) {
     asArray(root[kind]).forEach((state, index) => states.push(readState(state, kind, `${kind}${index + 1}`)));
   }
+  // Restore mixed-kind sibling order from the source tree because the object
+  // parser groups siblings by element name.
+  const sourceTree = parseXmlSource(text);
+  const rootSource = sourceTree.roots.find(element => element.localName === 'scxml');
+  const stateKinds = new Set<StateKind>(['state', 'parallel', 'final', 'history']);
+  const reorderStateChildren = (nodes: StateNode[], owner: XmlSourceElement | undefined): StateNode[] => {
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    const ordered: StateNode[] = [];
+    for (const childSource of owner?.children ?? []) {
+      if (!stateKinds.has(childSource.localName as StateKind)) continue;
+      const id = getAttribute(childSource, 'id')?.value;
+      const node = id ? byId.get(id) : undefined;
+      if (!node) continue;
+      node.children = reorderStateChildren(node.children, childSource);
+      ordered.push(node);
+      byId.delete(node.id);
+    }
+    for (const node of nodes) if (byId.has(node.id)) ordered.push(node);
+    return ordered;
+  };
+  const orderedStates = reorderStateChildren(states, rootSource);
   // Structural, lexical, reference, and data-model diagnostics are owned exclusively by
   // validateScxmlSource(). The model pass below performs only cross-state behavioral analysis.
   const behavioralMessages: string[] = [];
-  const semantics = collectStateSemantics(states);
+  const semantics = collectStateSemantics(orderedStates);
   const visit = (state: StateNode, depth = 0): void => {
     state.transitions.forEach(transition => validateTargetSet(state, transition, semantics, behavioralMessages));
     if (depth > 64) behavioralMessages.push(`State ${state.id} exceeds the supported nesting depth of 64.`);
@@ -443,12 +464,12 @@ export function parseScxml(text: string, profiles: CustomDataModelProfiles = {})
     }
     state.children.forEach(child => visit(child, depth + 1));
   };
-  states.forEach(state => visit(state));
-  detectUnconditionalEventlessCycles(states, behavioralMessages);
-  validateNormativeTransitions(states, behavioralMessages);
+  orderedStates.forEach(state => visit(state));
+  detectUnconditionalEventlessCycles(orderedStates, behavioralMessages);
+  validateNormativeTransitions(orderedStates, behavioralMessages);
   const rootInitial = readInitial(root);
   const effectiveRootInitial = rootInitial?.target || root['@_initial'];
-  validateReachability(states, effectiveRootInitial, behavioralMessages);
+  validateReachability(orderedStates, effectiveRootInitial, behavioralMessages);
   const semanticProblems = [...new Set(behavioralMessages)].map(message => {
     const token = /(?:state|region|history|target)\s+([A-Za-z_][\w.-]*)/i.exec(message)?.[1];
     const range: [number,number] = token ? findTextRange(text, token) : [0, Math.max(1, Math.min(text.length, 8))];
@@ -465,6 +486,6 @@ export function parseScxml(text: string, profiles: CustomDataModelProfiles = {})
     name: root['@_name'], version, namespace, dataModel: readDataDeclarations(root),
     initial: effectiveRootInitial, initialTransition: rootInitial,
     datamodel: root['@_datamodel'], binding, xmlBase: root['@_xml:base'],
-    states, ids, errors: allErrors, problems
+    states: orderedStates, ids, errors: allErrors, problems
   };
 }

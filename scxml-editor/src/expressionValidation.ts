@@ -22,7 +22,7 @@ function jsElement(text:string,e:XmlSourceElement,out:ExpressionProblem[],allowS
   for(const a of e.attributes) if(expressionAttributes.has(a.name)||locationAttributes.has(a.name)) jsAttribute(e,a,out);
   if(e.localName==='foreach') for(const n of ['item','index']) {
     const a=getAttribute(e,n); if(!a) continue;
-    try { if(!assignable(parseJs(a.value))) out.push(ap(a,`foreach@${n} must be an assignable ECMAScript location.`,'datamodel.ecmascript.location')); }
+    try { if(!assignable(parseJs(a.value))) out.push(ap(a,`foreach@${n} is not a statically assignable ECMAScript location; the processor will raise error.execution if it cannot be assigned at runtime.`,'datamodel.ecmascript.location','warning')); }
     catch(x) { out.push(ap(a,`Invalid ECMAScript ${n}: ${acornMessage(x)}.`,'datamodel.ecmascript.location')); }
   }
   if(e.localName==='script') {

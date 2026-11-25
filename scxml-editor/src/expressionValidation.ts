@@ -4,8 +4,8 @@ export type DataModelProfile='null'|'ecmascript'|'xpath'|'custom';
 export interface CustomDataModelProfile { expressionLanguage:'none'|'ecmascript'|'xpath'; allowScript?:boolean; allowData?:boolean; allowAssign?:boolean; allowForeach?:boolean; }
 export type CustomDataModelProfiles=Record<string,CustomDataModelProfile>;
 export interface ExpressionProblem { message:string;start:number;end:number;code:string;severity:'error'|'warning'; }
-const expressionAttributes=new Set(['cond','expr','array','eventexpr','targetexpr','typeexpr','delayexpr','srcexpr']);
-const locationAttributes=new Set(['location','idlocation','sendidexpr']);
+const expressionAttributes=new Set(['cond','expr','array','eventexpr','targetexpr','typeexpr','delayexpr','srcexpr','sendidexpr']);
+const locationAttributes=new Set(['location','idlocation']);
 const nullForbiddenElements=new Set(['datamodel','data','assign','foreach','script']);
 const xpathAxes=new Set(['ancestor','ancestor-or-self','attribute','child','descendant','descendant-or-self','following','following-sibling','namespace','parent','preceding','preceding-sibling','self']);
 function decodeXml(v:string):string{return v.replace(/&(?:lt|gt|amp|quot|apos|#\d+|#x[\da-fA-F]+);/g,e=>{if(e==='&lt;')return'<';if(e==='&gt;')return'>';if(e==='&amp;')return'&';if(e==='&quot;')return'"';if(e==='&apos;')return"'";const h=e.startsWith('&#x'),n=Number.parseInt(e.slice(h?3:2,-1),h?16:10);return Number.isFinite(n)?String.fromCodePoint(n):e;});}

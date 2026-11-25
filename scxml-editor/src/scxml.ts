@@ -165,6 +165,12 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
   };
   const ids = new Map<string, XmlSourceElement>();
   const invokeIds = new Map<string, XmlSourceElement>();
+  const version=getAttribute(root,'version')?.value;
+  if(version!==undefined&&version!=='1.0')add('scxml version must be 1.0.',root,'schema.version','version');
+  const namespace=namespaceInScope(root,'');
+  if(namespace!==SCXML_NAMESPACE)add(`scxml must use the namespace ${SCXML_NAMESPACE}.`,root,'schema.namespace','xmlns');
+  const binding=getAttribute(root,'binding')?.value;
+  if(binding!==undefined&&binding!=='early'&&binding!=='late')add('scxml binding must be early or late.',root,'schema.binding','binding');
   // SCXML uses interleaved content models for scxml, state, and parallel.
   // Their legal direct children are checked by CHILDREN and cardinality rules,
   // but those children are not required to appear in one fixed sequence.
@@ -197,6 +203,8 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
       for(const required of REQUIRED[local]??[]){if(!getAttribute(element,required))add(`<${local}> requires attribute ${required}.`,element,'schema.requiredAttribute');}
       validateOrder(element);
       const id=getAttribute(element,'id')?.value;if(id!==undefined){if(!isXmlId(id))add(`ID ${id} is not a valid XML identifier.`,element,'schema.id','id');else if(ids.has(id))add(`Duplicate ID ${id}.`,element,'schema.duplicateId','id');else ids.set(id,element);}
+      if(local==='transition'){const type=getAttribute(element,'type')?.value;if(type!==undefined&&type!=='internal'&&type!=='external')add('transition type must be internal or external.',element,'schema.transitionType','type');}
+      if(local==='history'){const type=getAttribute(element,'type')?.value;if(type!==undefined&&type!=='shallow'&&type!=='deep')add('history type must be shallow or deep.',element,'schema.historyType','type');}
       if(local==='send'){
         pair(element,'event','eventexpr');pair(element,'target','targetexpr');pair(element,'type','typeexpr');pair(element,'id','idlocation');pair(element,'delay','delayexpr');requireOne(element,['event','eventexpr']);
         const delay=getAttribute(element,'delay')?.value;if(delay&&!isDelay(delay))add('send delay must use a non-negative number followed by ms or s.',element,'schema.delay','delay');

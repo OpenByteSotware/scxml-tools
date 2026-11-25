@@ -203,7 +203,16 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
       for(const required of REQUIRED[local]??[]){if(!getAttribute(element,required))add(`<${local}> requires attribute ${required}.`,element,'schema.requiredAttribute');}
       validateOrder(element);
       const id=getAttribute(element,'id')?.value;if(id!==undefined){if(!isXmlId(id))add(`ID ${id} is not a valid XML identifier.`,element,'schema.id','id');else if(ids.has(id))add(`Duplicate ID ${id}.`,element,'schema.duplicateId','id');else ids.set(id,element);}
-      if(local==='transition'){const type=getAttribute(element,'type')?.value;if(type!==undefined&&type!=='internal'&&type!=='external')add('transition type must be internal or external.',element,'schema.transitionType','type');}
+      if(local==='transition'){
+        const type=getAttribute(element,'type')?.value;if(type!==undefined&&type!=='internal'&&type!=='external')add('transition type must be internal or external.',element,'schema.transitionType','type');
+        const owner=element.parent?.localName;
+        if(owner==='initial'||owner==='history'){
+          if(getAttribute(element,'event'))add(`<${owner}> transition must be eventless.`,element,'schema.eventless','event');
+          if(getAttribute(element,'cond'))add(`<${owner}> transition must be unconditional.`,element,'schema.unconditional','cond');
+          const target=getAttribute(element,'target');if(!target||!target.value.trim())add(`<${owner}> transition requires a nonempty target.`,element,'schema.requiredTarget','target');
+          if(getAttribute(element,'type'))add(`<${owner}> transition must not define type.`,element,'schema.transitionContext','type');
+        }
+      }
       if(local==='history'){const type=getAttribute(element,'type')?.value;if(type!==undefined&&type!=='shallow'&&type!=='deep')add('history type must be shallow or deep.',element,'schema.historyType','type');}
       if(local==='send'){
         pair(element,'event','eventexpr');pair(element,'target','targetexpr');pair(element,'type','typeexpr');pair(element,'id','idlocation');pair(element,'delay','delayexpr');requireOne(element,['event','eventexpr']);
@@ -213,6 +222,10 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
       }
       if(local==='invoke'){const invokeId=getAttribute(element,'id')?.value;if(invokeId){if(invokeIds.has(invokeId))add(`Duplicate invoke ID ${invokeId}.`,element,'semantic.duplicateInvokeId','id');else invokeIds.set(invokeId,element);}}
       const children=(name:string)=>element.children.filter(child=>!child.name.includes(':')&&child.localName===name);
+      if((local==='scxml'||local==='state')&&getAttribute(element,'initial')&&children('initial').length)add(`<${local}> cannot define both initial and a direct <initial> child.`,element,'schema.initialConflict','initial');
+      if((local==='scxml'||local==='state')&&children('initial').length>1)add(`<${local}> may contain at most one <initial> child.`,element,'schema.cardinality');
+      if(local==='initial'&&children('transition').length!==1)add('<initial> must contain exactly one transition.',element,'schema.cardinality');
+      if(local==='history'&&children('transition').length>1)add('<history> may contain at most one transition.',element,'schema.cardinality');
       if(local==='invoke'){
         pair(element,'id','idlocation');pair(element,'type','typeexpr');pair(element,'src','srcexpr');
         const auto=getAttribute(element,'autoforward')?.value;if(auto&&auto!=='true'&&auto!=='false')add('invoke autoforward must be true or false.',element,'schema.boolean','autoforward');
@@ -245,7 +258,15 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
     if(element.name.includes(':'))continue;
     if(element.localName==='scxml'||element.localName==='state')checkRef(element,'initial',element);
     if(element.localName==='transition'){
-      checkRef(element,'target',element.parent?.localName==='initial'?element.parent.parent:undefined);
+      checkRef(element,'target');
+      if(element.parent?.localName==='initial'){
+        const scope=element.parent.parent,target=getAttribute(element,'target');
+        if(scope&&target)for(const id of target.value.split(/\s+/).filter(Boolean)){
+          const resolved=ids.get(id);let current=resolved?.parent,inside=false;
+          while(current){if(current===scope){inside=true;break;}current=current.parent;}
+          if(!inside)out.push(problem(`initial target ${id} must be a descendant of its owning <${scope.localName}> scope.`,target.start,target.end,'schema.referenceScope'));
+        }
+      }
       const event=getAttribute(element,'event');
       if(event){for(const descriptor of event.value.split(/\s+/).filter(Boolean)){
         if(descriptor.startsWith('done.state.')){const id=descriptor.slice('done.state.'.length);if(!ids.has(id))out.push(problem(`Transition references missing completion state ${id}.`,event.start,event.end,'semantic.missingStateCompletion'));}

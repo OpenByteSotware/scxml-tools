@@ -331,7 +331,7 @@ export function updateExplicitInitial(text: string, update: ExplicitInitialUpdat
   const target = String(update.target ?? '').trim();
   if (!target) { throw new Error('Initial transition target is required.'); }
   if (!findState(text, target)) { throw new Error(`Initial target ${target} was not found.`); }
-  return setExplicitInitialElement(text, update.scopeId, target, String(update.cond ?? '').trim(), update.explicit);
+  return setExplicitInitialElement(text, update.scopeId, target, '', update.explicit);
 }
 
 function setExplicitInitialElement(text: string, scopeId: string | undefined, target: string, cond: string, explicit: boolean): string {
@@ -345,7 +345,6 @@ function setExplicitInitialElement(text: string, scopeId: string | undefined, ta
   if (!target) { throw new Error('Explicit initial transition requires a target.'); }
   let transition = '<transition/>';
   transition = setAttribute(transition, 'target', target);
-  transition = setAttribute(transition, 'cond', cond);
   const parentIndent = indentationAt(result, scope.start);
   const element = `${parentIndent}  <initial>\n${parentIndent}    ${transition}\n${parentIndent}  </initial>`;
   if (existing) { return replaceRange(result, existing.start, existing.end, element); }

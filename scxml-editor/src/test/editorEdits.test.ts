@@ -135,12 +135,14 @@ suite('Stage 1 root properties and explicit initial transitions', () => {
     const source = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="idle"><state id="idle"/></scxml>`;
     const changed = updateRootProperties(source, { version: '1.0', namespace: 'http://www.w3.org/2005/07/scxml', initialTarget: 'idle', explicitInitial: true, initialCond: 'ready' });
     assert.doesNotMatch(changed, /<scxml[^>]* initial=/);
-    assert.match(changed, /<initial>[\s\S]*<transition target="idle" cond="ready"\/>[\s\S]*<\/initial>/);
+    assert.match(changed, /<initial>[\s\S]*<transition target="idle"\/>[\s\S]*<\/initial>/);
+      assert.doesNotMatch(changed, /cond=/);
   });
   test('creates and removes a compound-state explicit initial transition', () => {
     const source = `<scxml><state id="parent" initial="one"><state id="one"/><state id="two"/></state></scxml>`;
     const explicit = updateExplicitInitial(source, { scopeId: 'parent', target: 'two', cond: 'enabled', explicit: true });
-    assert.match(explicit, /<state id="parent">[\s\S]*<initial>[\s\S]*target="two" cond="enabled"/);
+    assert.match(explicit, /<state id="parent">[\s\S]*<initial>[\s\S]*target="two"/);
+      assert.doesNotMatch(explicit, /cond=/);
     const attribute = updateExplicitInitial(explicit, { scopeId: 'parent', target: 'one', explicit: false });
     assert.match(attribute, /<state id="parent" initial="one">/);
     assert.doesNotMatch(attribute, /<initial>/);

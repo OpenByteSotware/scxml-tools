@@ -159,6 +159,17 @@ function namespaceInScope(element: XmlSourceElement, prefix: string): string | u
 function isXmlId(value: string): boolean { return /^[A-Za-z_][\w.-]*$/.test(value); }
 function isUri(value: string): boolean { try { new URL(value, 'file:///scxml/'); return !/\s/.test(value); } catch { return false; } }
 function isDelay(value: string): boolean { return /^(?:\d+(?:\.\d+)?)(?:ms|s)$/.test(value); }
+function eventDescriptorIssue(value:string):string|undefined{
+  if(!value.trim())return'event descriptor list must not be empty';
+  for(const descriptor of value.trim().split(/\s+/)){
+    if(descriptor==='*')continue;
+    if(!/^[A-Za-z_][\w.-]*(?:\.\*)?$/.test(descriptor))return`invalid event descriptor ${descriptor}`;
+    const concrete=descriptor.endsWith('.*')?descriptor.slice(0,-2):descriptor;
+    if(!concrete||concrete.startsWith('.')||concrete.endsWith('.')||concrete.includes('..'))return`event descriptor ${descriptor} contains an empty segment`;
+  }
+  return undefined;
+}
+
 function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProblem[]): void {
   const add = (message: string, element: XmlSourceElement, code: string, attribute?: string): void => {
     const [start, end] = attribute ? attributeRange(element, attribute) : [element.start, element.openEnd]; out.push(problem(message,start,end,code));
@@ -268,10 +279,14 @@ function validateScxmlTree(text: string, root: XmlSourceElement, out: ScxmlProbl
         }
       }
       const event=getAttribute(element,'event');
-      if(event){for(const descriptor of event.value.split(/\s+/).filter(Boolean)){
-        if(descriptor.startsWith('done.state.')){const id=descriptor.slice('done.state.'.length);if(!ids.has(id))out.push(problem(`Transition references missing completion state ${id}.`,event.start,event.end,'semantic.missingStateCompletion'));}
-        if(descriptor.startsWith('done.invoke.')){const id=descriptor.slice('done.invoke.'.length);if(!invokeIds.has(id))out.push(problem(`Transition references missing invoke completion ${id}.`,event.start,event.end,'semantic.missingInvokeCompletion'));}
-      }}
+      if(event){
+        const issue=eventDescriptorIssue(event.value);
+        if(issue)out.push(problem(`Invalid transition event descriptor: ${issue}.`,event.start,event.end,'semantic.eventDescriptor'));
+        else for(const descriptor of event.value.split(/\s+/).filter(Boolean)){
+          if(descriptor.startsWith('done.state.')&&!descriptor.endsWith('.*')){const id=descriptor.slice('done.state.'.length);if(!ids.has(id))out.push(problem(`Transition references missing completion state ${id}.`,event.start,event.end,'semantic.missingStateCompletion'));}
+          if(descriptor.startsWith('done.invoke.')&&!descriptor.endsWith('.*')){const id=descriptor.slice('done.invoke.'.length);if(!invokeIds.has(id))out.push(problem(`Transition references missing invoke completion ${id}.`,event.start,event.end,'semantic.missingInvokeCompletion'));}
+        }
+      }
     }
     if(element.localName==='send'){
       const target=getAttribute(element,'target');

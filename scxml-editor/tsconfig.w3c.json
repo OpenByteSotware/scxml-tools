@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "rootDir": "src",
+    "outDir": "out/w3c",
+    "sourceMap": true,
+    "noEmit": false
+  },
+  "include": ["src/w3cRunner.ts", "src/simulator.ts", "src/scxml.ts", "src/xmlSource.ts", "src/expressionValidation.ts"]
+}

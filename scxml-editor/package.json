@@ -127,7 +127,8 @@
     "watch": "webpack --mode development --watch",
     "package": "webpack --mode production",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "test:w3c": "tsc -p tsconfig.w3c.json && node out/w3c/w3cRunner.js"
   },
   "dependencies": {
     "fast-xml-parser": "^5.2.5",
